@@ -5,7 +5,7 @@
  *
  * Usage: node scripts/i18n-check.mjs
  */
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
@@ -68,6 +68,7 @@ const locales = localeDirs();
 const referenceNamespaces = namespaceFiles(REFERENCE);
 const problems = [];
 let comparedKeys = 0;
+let staticKeysChecked = 0;
 
 for (const locale of locales) {
   if (locale === REFERENCE) continue;
@@ -118,6 +119,35 @@ for (const file of referenceNamespaces) {
   }
 }
 
+/**
+ * Statically referenced copy (`locales/static-keys.json`) is resolved outside
+ * i18next — the always-resident marker entry reads these as plain JSON (§2).
+ * Key parity alone would accept a key that is missing from *every* locale, so
+ * the keys the static tables depend on are asserted directly.
+ */
+const staticKeysPath = join(localesDir, 'static-keys.json');
+if (existsSync(staticKeysPath)) {
+  const manifest = JSON.parse(readFileSync(staticKeysPath, 'utf8'));
+  for (const [namespace, keys] of Object.entries(manifest)) {
+    const file = `${namespace}.json`;
+    for (const locale of locales) {
+      if (!namespaceFiles(locale).includes(file)) {
+        problems.push(
+          `${locale}/${file}: required by locales/static-keys.json but the namespace file is missing`,
+        );
+        continue;
+      }
+      const present = new Set(readKeys(locale, file).keys);
+      for (const key of keys) {
+        staticKeysChecked += 1;
+        if (!present.has(key)) {
+          problems.push(`${locale}/${file}: ${key} is statically referenced but missing`);
+        }
+      }
+    }
+  }
+}
+
 if (problems.length > 0) {
   console.error(`i18n check failed (${problems.length} problem(s)):`);
   for (const problem of problems) console.error(`  - ${problem}`);
@@ -126,5 +156,6 @@ if (problems.length > 0) {
 
 console.log(
   `i18n check passed: ${locales.length} locale(s) (${locales.join(', ')}), ` +
-    `${referenceNamespaces.length} namespace(s), ${comparedKeys} reference key(s).`,
+    `${referenceNamespaces.length} namespace(s), ${comparedKeys} reference key(s), ` +
+    `${staticKeysChecked} static key reference(s).`,
 );

@@ -85,11 +85,11 @@ toDoList/
 
 **两条结构性决定**：
 
-1. **两个渲染入口**（`panel/index.html`、`marker/index.html`），不做单入口路由。标记页零依赖 React，只加载几十 KB 的 DOM + CSS，保证常驻内存与 CPU 最低。
+1. **两个渲染入口**（`panel/index.html`、`marker/index.html`），不做单入口路由。标记页零依赖 React、零依赖 i18next，只加载约 16 kB 的 DOM + CSS + 静态文案，保证常驻内存与 CPU 最低。
 
-   M0 实测产物：`marker.js 5.26 kB + marker.css 7.78 kB`（另需共享 i18n chunk 85.26 kB）、`panel.js 587.45 kB + panel.css 19.74 kB`、`main 377.85 kB`、`preload 3.36 kB`；ICU 打包（78.13 kB）由 i18next-icu 动态 import 承担，只有面板按需加载。
+   M0 实测产物：`marker.js 5.26 kB + marker.css 7.78 kB`（另需共享 i18n chunk 85.26 kB）、`panel.js 587.45 kB + panel.css 19.74 kB`、`main 377.85 kB`、`preload 3.36 kB`。
 
-   **M01 待优化**：常驻的标记窗口目前也加载 85.26 kB 的 i18next 共享 chunk，只为一条 `marker.tooltip` 文案；标记入口应改为只取 `marker` 命名空间的静态文案，把共享 chunk 从常驻路径上摘掉。
+   M01 实测产物：常驻标记路径为 `marker.js 5.63 kB + marker.css 7.78 kB + common chunk 2.68 kB = 16.09 kB`，i18next（约 82 kB）已完全移出常驻路径，只随面板打包（`panel.js 587.45 → 669.95 kB`、`panel.css 19.74 → 19.81 kB`）；`main 379.86 kB`、`preload 3.37 kB`。ICU 打包（78.13 kB，`es-*.js`）仍由 i18next-icu 动态 import 承担，只有面板按需加载。
 2. **`src/shared` 只放纯函数与类型**，不 import `electron`、不 import Node 内置模块；这样吸附算法、RRULE、格式化函数可以直接被 Vitest 单测覆盖，也能被两个渲染入口共用。
 
 ---
@@ -370,7 +370,8 @@ theme: { extend: { colors: {
 
 ## 8. i18n 接入
 
-- **入口**：主进程与两个渲染入口各自初始化一次 i18next（`marker` 不引入 `react-i18next`，只用核心 API + `i18next-icu`）。
+- **入口**：主进程与面板入口各自初始化一次 i18next（面板额外挂 `react-i18next`，并按需动态 import `i18next-icu`）。**常驻的标记入口不引入 i18next**：它只用到一条静态文案，改由 `src/renderer/marker/src/labels.ts` 直接读取 `locales/*/common.json`（§2）。
+- **静态文案的兜底**：`labels.ts` 里的类型约束保证「某语言缺 key 就 typecheck 失败」，同时把该 key 登记进 `locales/static-keys.json`，由 `npm run i18n:check` 逐语言校验存在性——因为 key 集合比对只看「各语言是否一致」，无法发现「所有语言都漏了」这种情形。
 - **语言检测顺序**：`settings.locale` → `app.getLocale()` → `Intl.DateTimeFormat().resolvedOptions().locale` → `en`。
 - **语言代码**：CLDR 规范，`locales/zh-Hans/`、`locales/zh-Hant/`、`locales/en/`、`locales/ja/`、`locales/ko/`、`locales/es/`、`locales/fr/`、`locales/de/`、`locales/ru/`、`locales/pt/`、`locales/it/`、`locales/ar/`、`locales/vi/`、`locales/th/`、`locales/id/`。
 - **命名空间**：`common`、`tasks`、`lists`、`settings`、`notifications`、`onboarding`、`errors`。

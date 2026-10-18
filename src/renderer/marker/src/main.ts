@@ -1,18 +1,18 @@
 import './marker.css';
 import { applyBootParams, readBoot, smokeEnabled } from '../../shared-ui/boot';
 import { attachDragBridge, clickIsSuppressed } from '../../shared-ui/drag';
-import { changeLocale, initRendererI18n, t } from '../../shared-ui/i18n';
 import { report } from '../../shared-ui/smoke';
+import { markerLabel } from './labels';
 
 /**
- * Marker entry — deliberately React-free (docs/ARCHITECTURE.md §2): a few DOM
- * nodes and CSS transitions keep the always-resident process at near-zero cost.
+ * Marker entry — deliberately React-free and i18next-free (docs/ARCHITECTURE.md
+ * §2): a few DOM nodes, a static label table and CSS transitions keep the
+ * always-resident process at near-zero cost.
  */
-void main();
+main();
 
-async function main(): Promise<void> {
+function main(): void {
   const boot = readBoot();
-  await initRendererI18n(boot.locale);
 
   const element = document.getElementById('marker');
   if (element === null) return;
@@ -20,7 +20,8 @@ async function main(): Promise<void> {
   const smoke = smokeEnabled(boot);
   const bridge = attachDragBridge(element);
 
-  setLabel(element);
+  let locale = boot.locale;
+  setLabel(element, locale);
   report(smoke, 'ready', { boot });
 
   let lastExpandAt = 0;
@@ -66,13 +67,14 @@ async function main(): Promise<void> {
     applyBootParams(params);
   });
 
-  window.api.on.localeChanged(({ locale }) => {
-    void changeLocale(locale).then(() => setLabel(element));
+  window.api.on.localeChanged((params) => {
+    locale = params.locale;
+    setLabel(element, locale);
   });
 }
 
-function setLabel(element: HTMLElement): void {
-  const label = t('marker.tooltip');
+function setLabel(element: HTMLElement, locale: string): void {
+  const label = markerLabel(locale, 'marker.tooltip');
   element.setAttribute('aria-label', label);
   element.title = label;
 }
