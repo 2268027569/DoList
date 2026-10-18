@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    name: Lint / Typecheck / Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      # 代码脚手架（M0）尚未创建时跳过校验，保证仓库初始化阶段 CI 为绿色
+      - name: Detect scaffold
+        id: scaffold
+        shell: bash
+        run: |
+          if [ -f package.json ]; then
+            echo "ready=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=0" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Scaffold pending::package.json 尚未创建，已跳过构建校验。"
+          fi
+
+      - name: Install dependencies
+        if: steps.scaffold.outputs.ready == '1'
+        run: npm ci
+
+      - name: Lint
+        if: steps.scaffold.outputs.ready == '1'
+        run: npm run lint --if-present
+
+      - name: Typecheck
+        if: steps.scaffold.outputs.ready == '1'
+        run: npm run typecheck --if-present
+
+      - name: Test
+        if: steps.scaffold.outputs.ready == '1'
+        run: npm test --if-present
+
+      - name: i18n key check
+        if: steps.scaffold.outputs.ready == '1'
+        run: npm run i18n:check --if-present
