@@ -1,0 +1,96 @@
+name: 缺陷报告 / Bug report
+description: 报告一个可复现的问题
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢报告问题。提交前请先搜索现有 Issue，避免重复；日志请先移除个人隐私内容。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 问题描述 / What happened
+      description: 发生了什么？你期望发生什么？请尽量具体。
+      placeholder: 例如：把标记拖到屏幕左边缘后，展开面板时面板出现在屏幕外，看不到内容。
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤 / Steps to reproduce
+      description: 从启动应用开始，一步步写清楚。
+      placeholder: |
+        1. 启动应用，鼠标悬停在标记上
+        2. 把标记拖到屏幕最右边缘并松手
+        3. 单击标记
+        4. 观察到……
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本 / App version
+      description: "设置 → 关于 中显示的版本号（尚未有安装包时请填“规格阶段/未发布”）。"
+      placeholder: 0.0.0
+    validations:
+      required: false
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 操作系统 / OS
+      multiple: false
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS（Apple 芯片 / Apple Silicon）
+        - macOS（Intel）
+        - 其他 / Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及模块 / Affected module
+      description: 参考 docs/FEATURES.md 中的模块编号，选最接近的一个。
+      multiple: true
+      options:
+        - M01 隐形标记与窗口系统
+        - M02 任务核心
+        - M03 视图与组织
+        - M04 提醒与通知
+        - M05 聚焦与激励
+        - M06 国际化与本地化
+        - M07 外观与个性化
+        - M08 数据、同步与迁移
+        - M09 系统集成
+        - M10 设置中心
+        - M11 更新与分发
+        - 不确定 / Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志与截图 / Logs and screenshots
+      description: 可直接粘贴日志文本或拖入截图。请务必移除任务标题、文件路径等隐私内容。
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 提交前确认 / Before submitting
+      options:
+        - label: 我已搜索现有 Issue，确认没有重复报告。
+          required: true
+        - label: 我已移除日志与截图中的个人隐私内容。
+          required: true

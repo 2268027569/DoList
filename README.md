@@ -71,13 +71,14 @@ Project docs are **Chinese-first** for now (the owner's primary language). Engli
 
 ## Contributing
 
-Issues and pull requests are welcome. A contribution guide, code of conduct and security policy will land together with the first code milestone.
+Issues and pull requests are welcome. Before you start, please read the [contribution guide](CONTRIBUTING.md), the [code of conduct](CODE_OF_CONDUCT.md) and the [security policy](SECURITY.md).
+Change history lives in the [changelog](CHANGELOG.md); third-party licenses are tracked in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 
 [MIT](LICENSE) © 2026 YiChen.
 
-Distributed builds bundle Electron, Chromium and Node.js, whose license texts must ship with every release; they will be listed in `THIRD_PARTY_NOTICES` from the first public build.
+Distributed builds bundle Electron, Chromium and Node.js, whose license texts must ship with every release and are tracked in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## Author
 

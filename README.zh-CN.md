@@ -71,13 +71,14 @@ Electron（官方稳定版）· electron-vite · TypeScript · React · Tailwind
 
 ## 参与贡献
 
-欢迎提 Issue 与 Pull Request。贡献指南、行为准则与安全策略将随第一个代码里程碑一起落地。
+欢迎提 Issue 与 Pull Request。动手前请先阅读[贡献指南](CONTRIBUTING.md)、[行为准则](CODE_OF_CONDUCT.md)与[安全策略](SECURITY.md)。
+变更历史见[变更日志](CHANGELOG.md)，第三方许可证见[第三方许可与署名](THIRD_PARTY_NOTICES.md)。
 
 ## 许可证
 
 [MIT](LICENSE) © 2026 YiChen。
 
-正式分发包内包含 Electron / Chromium / Node.js，其许可文本必须随包分发，将在首个公开版本起列入 `THIRD_PARTY_NOTICES`。
+正式分发包内包含 Electron / Chromium / Node.js，其许可文本必须随包分发，已在[第三方许可与署名](THIRD_PARTY_NOTICES.md)中登记。
 
 ## 作者
 

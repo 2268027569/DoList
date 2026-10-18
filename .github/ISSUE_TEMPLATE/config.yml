@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 功能模块清单（提 Issue 前先读）/ Feature modules
+    url: https://github.com/2268027569/DoList/blob/main/docs/FEATURES.md
+    about: 功能范围、优先级（P0/P1/P2）与"明确不做"的事项都在这里。
+  - name: 安全漏洞（请勿公开提交）/ Report a security issue
+    url: https://github.com/2268027569/DoList/security/advisories/new
+    about: 安全问题请通过私有渠道上报，流程见 SECURITY.md。
+  - name: 贡献指南 / Contributing guide
+    url: https://github.com/2268027569/DoList/blob/main/CONTRIBUTING.md
+    about: 提交代码、翻译与参与讨论前请先阅读。
