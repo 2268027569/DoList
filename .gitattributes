@@ -1,0 +1,21 @@
+# 统一换行符：Windows 本地开发、macOS 打包、Linux CI 三端一致，
+# 避免 CI 中的 bash 脚本因 CRLF 失效
+* text=auto eol=lf
+
+# 二进制文件不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.exe binary
+*.dll binary
+*.node binary
+*.sqlite binary
+*.db binary
