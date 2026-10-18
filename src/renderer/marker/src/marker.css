@@ -29,10 +29,19 @@
   width: calc(var(--marker-w, 28px) - 8px);
   height: calc(var(--marker-h, 28px) - 8px);
   background: var(--marker-tint);
-  box-shadow: var(--marker-shadow);
+  /*
+   * Two layers: the resting drop shadow, plus a hover ring that starts fully
+   * transparent. Keeping the ring as a second shadow layer (rather than a third
+   * element) means hovering animates one compositor property and never touches
+   * layout.
+   */
+  box-shadow:
+    var(--marker-shadow),
+    0 0 0 0 var(--marker-hover-ring);
   opacity: var(--marker-opacity, 1);
   transition:
     transform var(--duration-spring) var(--ease-spring),
+    box-shadow 140ms var(--ease-emphasized),
     opacity 120ms linear;
 }
 
@@ -118,6 +127,9 @@
 .marker[data-panel='shown'] .marker__core {
   transform: scale(1.08);
   opacity: 1;
+  box-shadow:
+    var(--marker-shadow),
+    0 0 0 var(--marker-hover-ring-width) var(--marker-hover-ring);
 }
 
 @media (prefers-reduced-motion: reduce) {

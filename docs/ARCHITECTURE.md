@@ -522,6 +522,10 @@ Chromium 在「指针捕获 + 窗口移动」时会重新定位系统光标（§
 
 **`--marker-ring-track` 为什么不是主题边框色**：标记浮在**桌面**上，不在任何主题表面上，浅灰边框色在浅色壁纸下等于隐形。改用随 `data-mode` 翻转的半透明中性色（light 下 `rgba(0,0,0,.3)`、dark 下 `rgba(255,255,255,.38)`），与面板阴影同一套思路，无需采样壁纸。
 
+**悬停反馈为什么不新增元素**：悬停环画成 `.marker__core` 的**第二层 `box-shadow`**（常态扩散为 0，`:hover` 与 `[data-panel='shown']` 时扩散到 `--marker-hover-ring-width`）。这样悬停只改一个合成属性，既不触碰布局，也不必为环再挂一个 DOM 节点——常驻窗口的节点数要省。环色与 `--marker-ring-track` 同理，用随 `data-mode` 翻转的半透明中性色，白环在浅色壁纸下同样会隐形。
+
+**为什么没有 `:focus-visible` 样式**：标记窗口是 `focusable: false`（§3），它永远拿不到键盘焦点，焦点环规则不可达，属死代码。
+
 ### 9.9 面板尺寸记忆与"伪 resize"（M01）
 
 面板窗口 `resizable: false`——Windows 上无边框透明窗口只有在 `thickFrame: true`（即带系统边框）时才有可拖拽的 resize 边框，那正是我们要避免的（§9.1.1）。因此：

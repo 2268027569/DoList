@@ -195,6 +195,17 @@
   --marker-tint: var(--accent);
   --marker-on-tint: var(--accent-on);
   --marker-ring: var(--accent);
+  /*
+   * Hover halo, drawn as a second shadow layer on the core so hovering costs one
+   * compositor property instead of an extra element. It starts at zero spread so
+   * the transition only has to grow it.
+   *
+   * Same reasoning as the ring track: the dot floats over the desktop, so the
+   * halo is a translucent neutral in the opposite direction of the current mode,
+   * not white — a white halo vanishes on a light wallpaper.
+   */
+  --marker-hover-ring: rgba(0, 0, 0, 0.25);
+  --marker-hover-ring-width: 3px;
 }
 
 :root[data-marker-tint='info'] {
@@ -226,9 +237,10 @@
   --marker-on-tint: var(--palette-neutral-1000);
 }
 
-/* Dark mode flips the ring track, so it stays visible on a dark wallpaper. */
+/* Dark mode flips the ring track and the hover halo, so both stay visible on a dark wallpaper. */
 :root[data-theme][data-mode='dark'] {
   --marker-ring-track: rgba(255, 255, 255, 0.38);
+  --marker-hover-ring: rgba(255, 255, 255, 0.32);
 }
 
 /* Risk overrides the ring colour, whatever the tint is (§FEATURES M01). */
