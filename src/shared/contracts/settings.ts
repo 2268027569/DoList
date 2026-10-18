@@ -12,6 +12,9 @@ export const SETTINGS_KEY = {
 /** Artwork scale bounds the marker window can be resized within (§9.1). */
 export const MARKER_SCALE_RANGE = { min: 0.8, max: 1.5 } as const;
 export const MARKER_OPACITY_RANGE = { min: 0.4, max: 1 } as const;
+/** Edge-snap threshold bounds, in DIPs (docs/FEATURES.md M01 "屏幕边缘吸附"). */
+export const MARKER_SNAP_THRESHOLD_RANGE = { min: 0, max: 80 } as const;
+export const DEFAULT_SNAP_THRESHOLD = 24;
 
 const fieldSchemas = {
   locale: z.string().max(35),
@@ -23,6 +26,11 @@ const fieldSchemas = {
   markerTint: z.enum(['accent', 'info', 'warning', 'overdue', 'neutral']),
   markerBadge: z.enum(['none', 'open', 'today', 'overdue']),
   markerRing: z.boolean(),
+  markerSnap: z.boolean(),
+  markerSnapThreshold: z
+    .number()
+    .min(MARKER_SNAP_THRESHOLD_RANGE.min)
+    .max(MARKER_SNAP_THRESHOLD_RANGE.max),
   panelAlwaysOnTop: z.boolean(),
 };
 
@@ -37,6 +45,8 @@ export const appSettingsSchema = z.object({
   markerTint: fieldSchemas.markerTint.default('accent'),
   markerBadge: fieldSchemas.markerBadge.default('open'),
   markerRing: fieldSchemas.markerRing.default(true),
+  markerSnap: fieldSchemas.markerSnap.default(true),
+  markerSnapThreshold: fieldSchemas.markerSnapThreshold.default(DEFAULT_SNAP_THRESHOLD),
   panelAlwaysOnTop: fieldSchemas.panelAlwaysOnTop.default(true),
 });
 
@@ -58,4 +68,13 @@ export function markerAppearanceOf(settings: AppSettings): MarkerAppearance {
     badgeMode: settings.markerBadge,
     showRing: settings.markerRing,
   };
+}
+
+/**
+ * Snap distance for the marker's drag release: zero disables snapping, because
+ * `snapToWorkArea` with a threshold of 0 never fires and the anchor is then built
+ * as `free`, which round-trips through `fromAnchor` unchanged (§9.3).
+ */
+export function markerSnapThresholdOf(settings: AppSettings): number {
+  return settings.markerSnap ? settings.markerSnapThreshold : 0;
 }

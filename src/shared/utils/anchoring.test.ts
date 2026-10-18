@@ -74,6 +74,17 @@ describe('anchor round trip', () => {
     expect(restored.x).toBe(2560 - MARKER.width);
     expect(restored.y).toBeCloseTo(anchor.ratioAlongEdge * (1400 - MARKER.height), 6);
   });
+
+  it('round-trips a free anchor, which is what "snapping off" relies on', () => {
+    // A zero threshold never snaps, so the release builds a `free` anchor; the
+    // marker must then reproduce exactly the position the user dropped it at.
+    const dropped: Rect = { x: 40, y: 300, ...MARKER };
+    const snapped = snapToWorkArea(dropped, WORK_AREA, 0);
+    expect(snapped.edge).toBe('free');
+
+    const anchor = toAnchor({ ...dropped, x: snapped.x, y: snapped.y }, WORK_AREA, 'display-1', 'free');
+    expect(fromAnchor(anchor, WORK_AREA, MARKER)).toEqual({ x: 40, y: 300 });
+  });
 });
 
 describe('isVisibleIn', () => {

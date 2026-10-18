@@ -167,6 +167,14 @@
   --duration-expand: 200ms;
   --duration-collapse: 160ms;
   --ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
+  /*
+   * Spring feel for the expand / collapse primitive (§FEATURES M01): a small
+   * overshoot on the way in, so the panel settles rather than stopping dead.
+   * Only transform and opacity use it, which keeps the whole animation on the
+   * compositor (§7).
+   */
+  --ease-spring: cubic-bezier(0.34, 1.42, 0.5, 1);
+  --duration-spring: 200ms;
 }
 
 /* --------------------------------------------- layer 3 · marker variants */

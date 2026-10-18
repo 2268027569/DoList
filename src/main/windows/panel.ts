@@ -15,6 +15,10 @@ import { PANEL_SIZE } from './window-state';
 
 const log = createLogger('windows/panel');
 
+/** Panel animation lengths, inside the 180–220ms window of FEATURES M01. */
+const EXPAND_DURATION_MS = 200;
+const COLLAPSE_DURATION_MS = 180;
+
 /** Blur -> collapse delay, so clicking inside the panel does not close it (§3). */
 const COLLAPSE_DELAY_MS = 150;
 /** Safety net if the renderer never reports its collapse animation as finished. */
@@ -96,7 +100,7 @@ export function expandPanel(): PanelState {
   window.moveTop();
 
   panelState = 'shown';
-  send({ state: 'expanding', durationMs: 200 });
+  send({ state: 'expanding', durationMs: EXPAND_DURATION_MS });
   log('panel expanded', { markerBounds, panelBounds: window.getBounds() });
   smokeRecord('panel-expanded', { panelBounds: window.getBounds() });
   return panelState;
@@ -111,7 +115,7 @@ export function collapsePanel(): void {
   if (panelState === 'collapsing') return;
 
   panelState = 'collapsing';
-  send({ state: 'collapsing', durationMs: 160 });
+  send({ state: 'collapsing', durationMs: COLLAPSE_DURATION_MS });
   cancelFallback();
   fallbackTimer = setTimeout(() => {
     log('collapse animation was not acknowledged, hiding anyway');

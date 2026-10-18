@@ -32,7 +32,7 @@
   box-shadow: var(--marker-shadow);
   opacity: var(--marker-opacity, 1);
   transition:
-    transform 120ms var(--ease-emphasized),
+    transform var(--duration-spring) var(--ease-spring),
     opacity 120ms linear;
 }
 

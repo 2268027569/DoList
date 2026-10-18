@@ -1,7 +1,7 @@
 import { screen } from 'electron';
 import type { Display, Rectangle } from 'electron';
 
-import { fromAnchor, snapToWorkArea, toAnchor } from '@shared/utils/anchoring';
+import { fromAnchor, snapToWorkArea, SNAP_THRESHOLD_PX, toAnchor } from '@shared/utils/anchoring';
 import { markerWindowSize as artworkWindowSize } from '@shared/utils/marker-geometry';
 import type { Size } from '@shared/utils/marker-geometry';
 import type { MarkerAnchor, MarkerAppearance } from '@shared/types/app';
@@ -66,8 +66,12 @@ export function resolveMarkerBounds(anchor: MarkerAnchor, size: Size): Rectangle
 }
 
 /** Absolute rectangle -> anchor, used after a drag or a display change. */
-export function anchorForBounds(bounds: Rectangle, display: Display): MarkerAnchor {
-  const snapped = snapToWorkArea(bounds, display.workArea);
+export function anchorForBounds(
+  bounds: Rectangle,
+  display: Display,
+  threshold: number = SNAP_THRESHOLD_PX,
+): MarkerAnchor {
+  const snapped = snapToWorkArea(bounds, display.workArea, threshold);
   const settled: Rectangle = { ...bounds, x: snapped.x, y: snapped.y };
   return toAnchor(settled, display.workArea, String(display.id), snapped.edge);
 }

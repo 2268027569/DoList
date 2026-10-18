@@ -3,9 +3,10 @@ import { join } from 'node:path';
 
 import { IPC } from '@shared/contracts/channels';
 import type { MarkerStatePayload } from '@shared/contracts/channels';
-import { markerAppearanceOf } from '@shared/contracts/settings';
+import { markerAppearanceOf, markerSnapThresholdOf } from '@shared/contracts/settings';
 import { TRANSPARENT_WINDOW_BACKGROUND } from '@shared/theme/window-background';
 import type { BootParams, MarkerAnchor, MarkerAppearance, Rect } from '@shared/types/app';
+import { SNAP_THRESHOLD_PX } from '@shared/utils/anchoring';
 import { DEFAULT_APPEARANCE } from '@shared/utils/marker-geometry';
 import { createLogger } from '../logger';
 import { isSmokeEnabled, smokeReady, smokeRecord } from '../platform/smoke';
@@ -227,12 +228,12 @@ export function endMarkerDrag(): MarkerAnchor | null {
   // Where the cursor actually left it, before edge snapping is applied.
   const rawBounds = window.getBounds();
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const anchor = anchorForBounds(rawBounds, display);
+  const anchor = anchorForBounds(rawBounds, display, currentSnapThreshold());
   window.setBounds(resolveMarkerBounds(anchor, markerWindowSize(currentAppearance)));
   currentAnchor = anchor;
   writeMarkerAnchor(anchor);
 
-  log('marker drag ended', { anchor, ticks: state.ticks });
+  log('marker drag ended', { anchor, ticks: state.ticks, snap: currentSnapThreshold() });
   smokeRecord('drag-end', {
     anchor,
     ticks: state.ticks,
@@ -240,6 +241,11 @@ export function endMarkerDrag(): MarkerAnchor | null {
     bounds: window.getBounds(),
   });
   return anchor;
+}
+
+/** Snap distance at drag release: the stored setting, or 0 when snapping is off. */
+function currentSnapThreshold(): number {
+  return isSmokeEnabled() ? SNAP_THRESHOLD_PX : markerSnapThresholdOf(appSettings());
 }
 
 function tickDrag(): void {

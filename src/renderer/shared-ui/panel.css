@@ -9,12 +9,15 @@
  * Expand / collapse primitive. Only opacity and transform animate, so the
  * compositor does the work and the main process never animates window bounds
  * (docs/ARCHITECTURE.md §7, §9.1).
+ *
+ * The transform eases with the spring curve and opacity with the plain one:
+ * an overshoot on opacity would only be clipped at 1, adding nothing.
  */
 .panel-card {
   opacity: 0;
   transform: scale(0.96);
   transition-property: opacity, transform;
-  transition-timing-function: var(--ease-emphasized);
+  transition-timing-function: var(--ease-emphasized), var(--ease-spring);
 }
 
 .panel-card[data-phase='open'] {
