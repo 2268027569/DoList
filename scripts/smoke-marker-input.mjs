@@ -31,8 +31,13 @@ const ps1File = join(smokeDir, 'drive-cursor.ps1');
 const args = process.argv.slice(2);
 const focusable = args.includes('--focusable');
 const skipBuild = args.includes('--no-build');
-const dragDxPhysical = -220;
-const dragDyPhysical = 160;
+/**
+ * The first drag, in DIPs. It is deliberately long and taken in many small
+ * steps (see DRAG_STEPS) so that per-frame error would accumulate visibly
+ * rather than hide inside the tolerance. `driveCursor` converts to the physical
+ * pixels the OS cursor counts.
+ */
+const DRAG_DIP = { dx: -220, dy: 160 };
 /**
  * Drag in many small steps. A short drag cannot distinguish "the loop lands in
  * the right place" from "the loop accumulates a little error each frame", and
@@ -55,6 +60,14 @@ const EXPECTED_WINDOW = { width: 32, height: 39 };
 const PANEL_SIZE = { width: 380, height: 560 };
 /** Gap the panel is placed at, from `PANEL_GAP_PX` in shared/utils/anchoring.ts. */
 const PANEL_GAP_DIP = 8;
+/**
+ * Park policy the app runs with under `YICHEN_SMOKE=1`, mirroring SMOKE_EDGE_HIDE
+ * in src/main/windows/marker.ts. Kept here so the assertions can state the
+ * expected geometry without importing main-process code.
+ */
+const EDGE_HIDE = { peek: 5, revealDistance: 24, hideDistance: 48 };
+/** Tolerance for the parked position, in DIPs (rounding + fractional scaling). */
+const EDGE_HIDE_TOLERANCE_DIP = 2;
 /** The renderer swallows clicks for 300ms after a drag (§9.2). */
 const CLICK_SUPPRESSION_BACKOFF_MS = 450;
 
@@ -137,6 +150,10 @@ function driveCursor({ bounds, display, click, drag }) {
   // Electron works in DIPs; the OS cursor works in physical pixels.
   const physicalX = Math.round((bounds.x + bounds.width / 2 - origin.x) * scale + origin.x);
   const physicalY = Math.round((bounds.y + bounds.height / 2 - origin.y) * scale + origin.y);
+  const dragPhysical =
+    drag === undefined
+      ? null
+      : { dx: Math.round(drag.dx * scale), dy: Math.round(drag.dy * scale) };
 
   const scriptArgs = [
     '-NoProfile',
@@ -150,13 +167,13 @@ function driveCursor({ bounds, display, click, drag }) {
     String(physicalY),
   ];
   if (click) scriptArgs.push('-Click');
-  if (drag) {
+  if (dragPhysical !== null) {
     scriptArgs.push(
       '-Drag',
       '-DragDx',
-      String(dragDxPhysical),
+      String(dragPhysical.dx),
       '-DragDy',
-      String(dragDyPhysical),
+      String(dragPhysical.dy),
       '-Steps',
       String(DRAG_STEPS),
     );
@@ -168,9 +185,10 @@ function driveCursor({ bounds, display, click, drag }) {
   const trace = parsePointList(stdout, 'trace:');
   return {
     physical: { x: physicalX, y: physicalY },
-    scriptedEnd: drag
-      ? { x: physicalX + dragDxPhysical, y: physicalY + dragDyPhysical }
-      : { x: physicalX, y: physicalY },
+    scriptedEnd:
+      dragPhysical === null
+        ? { x: physicalX, y: physicalY }
+        : { x: physicalX + dragPhysical.dx, y: physicalY + dragPhysical.dy },
     settle: parsePoint(stdout, 'settle:'),
     final: parsePoint(stdout, 'final:'),
     trace,
@@ -273,13 +291,13 @@ Write-Output "final:$($p.X),$($p.Y)"
  * captured drag moves the window (§9.1.1) and which would therefore accept a
  * wrong landing as "expected".
  */
-async function runDrag(startBounds, display, attempts = 3) {
+async function runDrag(startBounds, display, deltaDip, attempts = 3) {
   let bounds = startBounds;
   let lastFailure = 'no attempt ran';
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const since = Date.now();
-    const drive = driveCursor({ bounds, display, drag: true });
+    const drive = driveCursor({ bounds, display, drag: deltaDip });
     const dragEnd = await waitForEvent('drag-end', 10_000, since);
     const start = await waitForEvent('drag-start', 2_000, since);
 
@@ -304,7 +322,13 @@ async function runDrag(startBounds, display, attempts = 3) {
 
       lastFailure =
         `the marker landed at ${JSON.stringify({ x: actual.x, y: actual.y })}, expected ` +
-        `${JSON.stringify({ x: Math.round(expected.x), y: Math.round(expected.y) })} (Δ ${dx}/${dy} DIP)`;
+        `${JSON.stringify({ x: Math.round(expected.x), y: Math.round(expected.y) })} (Δ ${dx}/${dy} DIP)` +
+        // A desktop shared with a human is the usual reason a drag "fails": the
+        // scripted path stopped being the real one. Say so, so a busy desk is not
+        // reported as a broken application.
+        (drive.settle === null
+          ? ''
+          : ` — cursor settled ${distance(drive.settle, drive.physical)} physical px off the scripted path`);
       log(`attempt ${attempt}: ${lastFailure} — retrying`);
       bounds = dragEnd.detail?.bounds ?? bounds;
     }
@@ -426,7 +450,7 @@ async function main() {
     }
 
     // --- phase 1: drag ------------------------------------------------------
-    const drag = await runDrag(initial, display);
+    const drag = await runDrag(initial, display, DRAG_DIP);
 
     if (drag === null) {
       fail('the marker did not follow the cursor across the desktop');
@@ -447,12 +471,88 @@ async function main() {
       pass('persisted anchor after drag', drag.dragEnd.detail?.anchor);
     }
 
-    // --- phase 2: click -----------------------------------------------------
+    /** Where the marker is right now, as the harness must aim at live bounds. */
+    let markerNow = drag?.dragEnd?.detail?.bounds ?? initial;
+
+    // --- phase 2: edge auto-hide --------------------------------------------
+    // The park policy only applies to an edge anchor (§9.4), so the marker is
+    // dragged flush against the right edge first. That drag ends with the cursor
+    // still on the dot — the visible state — so parking is proven by moving the
+    // cursor away, and revealing by aiming it back at the sliver.
+    const area = display?.workArea ?? display?.bounds ?? null;
+    if (area === null) {
+      fail('the work area of the marker display was not published, so the park geometry is unverifiable');
+    } else {
+      const flushRight = area.x + area.width - markerNow.width;
+      const edgeDrag = await runDrag(markerNow, display, { dx: flushRight - markerNow.x, dy: 0 });
+      const anchor = edgeDrag?.dragEnd?.detail?.anchor ?? null;
+      markerNow = edgeDrag?.dragEnd?.detail?.bounds ?? markerNow;
+
+      if (anchor === null || anchor.edge !== 'right') {
+        fail(`the marker did not anchor to the right edge, so auto-hide cannot apply: ${JSON.stringify(anchor)}`);
+      } else {
+        pass('the marker anchored to the right edge after the drag', anchor);
+      }
+
+      const parkSince = Date.now();
+      driveCursor({ bounds: { x: area.x + 60, y: area.y + 60, width: 0, height: 0 }, display });
+      const park = await waitForEvent('edge-park', 4_000, parkSince);
+
+      if (park === null) {
+        fail('the marker did not park after the cursor left the edge');
+      } else {
+        const parked = park.detail?.bounds ?? {};
+        const visible = area.x + area.width - parked.x;
+        if (Math.abs(visible - EDGE_HIDE.peek) <= EDGE_HIDE_TOLERANCE_DIP) {
+          pass(
+            `marker parked at the edge, leaving ${visible}px of it inside the work area ` +
+              `(configured ${EDGE_HIDE.peek})`,
+            { parked, edge: park.detail?.edge },
+          );
+        } else {
+          fail(
+            `marker parked at ${JSON.stringify(parked)}, i.e. ${visible}px inside the work area, ` +
+              `expected ${EDGE_HIDE.peek}`,
+          );
+        }
+      }
+
+      const revealSince = Date.now();
+      driveCursor({
+        bounds: {
+          x: area.x + area.width - EDGE_HIDE.peek / 2,
+          y: markerNow.y + markerNow.height / 2,
+          width: 0,
+          height: 0,
+        },
+        display,
+      });
+      const reveal = await waitForEvent('edge-reveal', 4_000, revealSince);
+
+      if (reveal === null) {
+        fail('the marker did not come back out when the cursor reached the sliver');
+      } else {
+        const back = reveal.detail?.bounds ?? {};
+        if (distance(back, markerNow) <= EDGE_HIDE_TOLERANCE_DIP) {
+          pass('marker came back to its anchored position when the cursor approached', {
+            revealed: back,
+            anchored: markerNow,
+          });
+        } else {
+          fail(
+            `marker came back to ${JSON.stringify(back)}, expected its anchored ` +
+              `${JSON.stringify({ x: markerNow.x, y: markerNow.y })}`,
+          );
+        }
+      }
+    }
+
+    // --- phase 3: click -----------------------------------------------------
     // Click where the drag actually left the marker — its boot-time bounds are a
     // stale snapshot, and edge snapping may have nudged it on top of that — then
     // wait out the post-drag click suppression.
     await new Promise((resolve) => setTimeout(resolve, CLICK_SUPPRESSION_BACKOFF_MS));
-    const clickTarget = drag?.dragEnd.detail?.bounds ?? markerBounds();
+    const clickTarget = markerNow;
 
     if (clickTarget === null) {
       fail('the marker position after the drag is unknown, so the click could not be aimed');
@@ -473,14 +573,15 @@ async function main() {
     } else {
       pass('panel expanded next to the marker', panelEvent.detail);
 
-      // --- phase 3: panel geometry ------------------------------------------
+      // --- phase 4: panel geometry ------------------------------------------
       // The panel is not OS-resizable (§9.1.1), so its size comes from settings
       // and its position from `placePanel`. Both are asserted here: a panel that
       // opened at the wrong size, or off the work area, is unusable.
       const panelBounds = panelEvent.detail?.panelBounds ?? null;
-      const markerAfterClick = await waitForEvent('drag-end', 1, 0);
-      const markerAt =
-        markerAfterClick?.detail?.bounds ?? clickTarget ?? markerBounds();
+      // `clickTarget` is the marker's live bounds at click time; do not read the
+      // first `drag-end` event back here, which with two drags in this run would
+      // be a stale position and would let a misplaced panel pass.
+      const markerAt = clickTarget ?? markerBounds();
 
       if (panelBounds === null || markerAt === null) {
         fail('the panel or marker bounds were not published, so the geometry is unverifiable');

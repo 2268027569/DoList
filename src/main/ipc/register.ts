@@ -31,6 +31,7 @@ import {
   endMarkerDrag,
   noteDragSignal,
   startMarkerDrag,
+  syncEdgeHideWatch,
 } from '../windows/marker';
 import {
   collapsePanel,
@@ -123,6 +124,9 @@ export function registerIpcHandlers(): void {
     if (markerAppearanceChanged(previous, updated)) {
       applyMarkerAppearance(markerAppearanceOf(updated));
     }
+    // Edge auto-hide and its distances live in settings too, so the park watcher
+    // is re-evaluated on every settings write, not just on appearance changes.
+    syncEdgeHideWatch('settings');
     return ok(appSettingsSchema.parse(updated));
   });
 

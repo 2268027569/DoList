@@ -3,10 +3,12 @@ import { join } from 'node:path';
 
 import { IPC } from '@shared/contracts/channels';
 import type { MarkerStatePayload } from '@shared/contracts/channels';
-import { markerAppearanceOf, markerSnapThresholdOf } from '@shared/contracts/settings';
+import { markerAppearanceOf, markerEdgeHideOf, markerSnapThresholdOf } from '@shared/contracts/settings';
 import { TRANSPARENT_WINDOW_BACKGROUND } from '@shared/theme/window-background';
 import type { BootParams, MarkerAnchor, MarkerAppearance, Rect } from '@shared/types/app';
 import { SNAP_THRESHOLD_PX } from '@shared/utils/anchoring';
+import { nextEdgeHideState, parkedRect } from '@shared/utils/edge-hide';
+import type { EdgeHideConfig, EdgeHideState } from '@shared/utils/edge-hide';
 import { DEFAULT_APPEARANCE } from '@shared/utils/marker-geometry';
 import { createLogger } from '../logger';
 import { isSmokeEnabled, smokeReady, smokeRecord } from '../platform/smoke';
@@ -30,6 +32,15 @@ const DRAG_RELEASE_SILENCE_MS = 600;
 /** Hard stop, used when the pointer stops moving too (pointer capture never fires). */
 const DRAG_ABORT_SILENCE_MS = 2500;
 
+/**
+ * Cursor sampling period while the marker is parked at an edge. The timer only
+ * exists in that state — a visible marker costs nothing (§9.4).
+ */
+const EDGE_HIDE_POLL_MS = 100;
+
+/** Park policy the smoke harness runs with, so the assertions are deterministic. */
+const SMOKE_EDGE_HIDE: EdgeHideConfig = { peek: 5, revealDistance: 24, hideDistance: 48 };
+
 interface DragState {
   offsetX: number;
   offsetY: number;
@@ -44,6 +55,11 @@ let markerWindow: BrowserWindow | null = null;
 let drag: DragState | null = null;
 let currentAnchor: MarkerAnchor = DEFAULT_MARKER_ANCHOR;
 let currentAppearance: MarkerAppearance = DEFAULT_APPEARANCE;
+/** Cursor watcher that parks the marker at an edge; `null` while it is not needed. */
+let edgeHideTimer: NodeJS.Timeout | null = null;
+let edgeParked = false;
+/** The panel is open, so the marker must stay visible — it is the panel's anchor. */
+let panelVisible = false;
 
 export function getMarkerWindow(): BrowserWindow | null {
   return markerWindow;
@@ -141,6 +157,10 @@ export function createMarkerWindow(boot: BootParams): BrowserWindow {
   markerWindow = window;
   void loadRenderer(window, 'marker', { ...boot, marker: currentAppearance });
   watchDisplayChanges();
+  // Someone who left auto-hide on expects the marker to be parked right away.
+  // The harness is the exception: it aims its first drag at the boot bounds, so
+  // it starts the same policy on its first edge drag instead (§9.4).
+  if (!isSmokeEnabled()) syncEdgeHideWatch('boot');
   return window;
 }
 
@@ -152,10 +172,10 @@ export function createMarkerWindow(boot: BootParams): BrowserWindow {
 export function applyMarkerAppearance(appearance: MarkerAppearance): void {
   currentAppearance = appearance;
   if (markerWindow && !markerWindow.isDestroyed()) {
-    const size = markerWindowSize(appearance);
-    markerWindow.setBounds(resolveMarkerBounds(currentAnchor, size));
-    log('marker appearance applied', { appearance, size });
+    revealMarker('appearance');
+    log('marker appearance applied', { appearance, size: markerWindowSize(appearance) });
   }
+  syncEdgeHideWatch('appearance');
   pushMarkerState();
 }
 
@@ -174,7 +194,116 @@ function resolveMarkerState(): MarkerStatePayload {
 export function applyMarkerAnchor(anchor: MarkerAnchor): void {
   currentAnchor = anchor;
   if (!markerWindow || markerWindow.isDestroyed()) return;
-  markerWindow.setBounds(resolveMarkerBounds(anchor, markerWindowSize(currentAppearance)));
+  revealMarker('set-anchor');
+  syncEdgeHideWatch('set-anchor');
+}
+
+/**
+ * Puts the marker back at the position its anchor implies and returns that
+ * rectangle. Needed because a parked marker's own bounds are mostly off screen:
+ * the anchor, not the live bounds, is what callers such as the panel must use.
+ */
+export function revealMarker(reason: string): Rect | null {
+  const wasParked = edgeParked;
+  edgeParked = false;
+
+  const window = markerWindow;
+  if (window === null || window.isDestroyed()) return null;
+
+  const bounds = resolveMarkerBounds(currentAnchor, markerWindowSize(currentAppearance));
+  const current = window.getBounds();
+  const differs =
+    current.x !== bounds.x ||
+    current.y !== bounds.y ||
+    current.width !== bounds.width ||
+    current.height !== bounds.height;
+  if (!differs) return bounds;
+
+  window.setBounds(bounds);
+  if (wasParked) {
+    log('marker left the screen edge', { reason, bounds });
+    smokeRecord('edge-reveal', { reason, bounds });
+  }
+  return bounds;
+}
+
+/**
+ * Starts or stops the park watcher (docs/ARCHITECTURE.md §9.4). Only an edge
+ * anchor can hide, and never while the marker is being dragged or while the
+ * panel needs it on screen; in every other case the marker is left where the
+ * anchor puts it and no timer runs at all.
+ */
+export function syncEdgeHideWatch(reason: string): void {
+  const config = currentEdgeHideConfig();
+  const active =
+    config !== null && currentAnchor.edge !== 'free' && drag === null && !panelVisible;
+
+  if (!active) {
+    stopEdgeHideWatch();
+    revealMarker(reason);
+    return;
+  }
+  if (edgeHideTimer !== null) return;
+
+  edgeHideTimer = setInterval(tickEdgeHide, EDGE_HIDE_POLL_MS);
+  log('edge hide watch started', { reason, edge: currentAnchor.edge, config });
+}
+
+/** Told by the panel window, which shares the screen with the marker (§9.4). */
+export function setMarkerPanelVisible(visible: boolean): void {
+  if (panelVisible === visible) return;
+  panelVisible = visible;
+  syncEdgeHideWatch('panel-visibility');
+}
+
+/** Park policy from settings, or the fixed harness policy under `YICHEN_SMOKE=1`. */
+function currentEdgeHideConfig(): EdgeHideConfig | null {
+  return isSmokeEnabled() ? SMOKE_EDGE_HIDE : markerEdgeHideOf(appSettings());
+}
+
+function stopEdgeHideWatch(): void {
+  if (edgeHideTimer === null) return;
+  clearInterval(edgeHideTimer);
+  edgeHideTimer = null;
+  log('edge hide watch stopped');
+}
+
+/**
+ * One cursor sample. Both rectangles come from the anchor rather than from
+ * `getBounds()`: while parked the live bounds are the off-screen ones, and
+ * deciding against those would keep the marker parked forever.
+ */
+function tickEdgeHide(): void {
+  const window = markerWindow;
+  const config = currentEdgeHideConfig();
+  if (window === null || window.isDestroyed() || config === null) return;
+
+  const full = resolveMarkerBounds(currentAnchor, markerWindowSize(currentAppearance));
+  const previous: EdgeHideState = edgeParked ? 'hidden' : 'shown';
+  const next = nextEdgeHideState(
+    previous,
+    screen.getCursorScreenPoint(),
+    full,
+    currentAnchor.edge,
+    config,
+  );
+  if (next === previous) return;
+
+  const bounds = next === 'hidden' ? parkedRect(full, currentAnchor.edge, config.peek) : full;
+  if (bounds === null) return;
+
+  edgeParked = next === 'hidden';
+  window.setBounds(bounds);
+  log(edgeParked ? 'marker parked at the screen edge' : 'marker left the screen edge', {
+    edge: currentAnchor.edge,
+    bounds,
+    full,
+  });
+  smokeRecord(edgeParked ? 'edge-park' : 'edge-reveal', {
+    edge: currentAnchor.edge,
+    bounds,
+    full,
+  });
 }
 
 /**
@@ -186,6 +315,12 @@ export function applyMarkerAnchor(anchor: MarkerAnchor): void {
 export function startMarkerDrag(grab: { grabX: number; grabY: number }): void {
   const window = markerWindow;
   if (drag !== null || !window || window.isDestroyed()) return;
+
+  // The drag loop owns the window position from here on, so the park watcher has
+  // to let go first — and the marker must be on screen, because the grab offset
+  // is measured against the bounds the pointer actually landed on (§9.4).
+  stopEdgeHideWatch();
+  revealMarker('drag-start');
 
   const cursor = screen.getCursorScreenPoint();
   const bounds = window.getBounds();
@@ -229,9 +364,10 @@ export function endMarkerDrag(): MarkerAnchor | null {
   const rawBounds = window.getBounds();
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const anchor = anchorForBounds(rawBounds, display, currentSnapThreshold());
-  window.setBounds(resolveMarkerBounds(anchor, markerWindowSize(currentAppearance)));
   currentAnchor = anchor;
   writeMarkerAnchor(anchor);
+  revealMarker('drag-end');
+  syncEdgeHideWatch('drag-end');
 
   log('marker drag ended', { anchor, ticks: state.ticks, snap: currentSnapThreshold() });
   smokeRecord('drag-end', {
@@ -278,7 +414,9 @@ function watchDisplayChanges(): void {
     if (markerWindow === null || markerWindow.isDestroyed() || drag !== null) return;
 
     const display = displayForAnchor(currentAnchor);
-    const bounds = markerWindow.getBounds() as Rect;
+    // The anchor's rectangle, not the live bounds: a parked marker's bounds are
+    // deliberately mostly off screen and would look like a stray marker (§9.4).
+    const bounds = resolveMarkerBounds(currentAnchor, markerWindowSize(currentAppearance));
     const visible = screen.getAllDisplays().some((candidate) => {
       const area = candidate.workArea;
       return (
@@ -293,7 +431,8 @@ function watchDisplayChanges(): void {
     const anchor = anchorForBounds(bounds, display);
     currentAnchor = anchor;
     writeMarkerAnchor(anchor);
-    markerWindow.setBounds(resolveMarkerBounds(anchor, markerWindowSize(currentAppearance)));
+    revealMarker('display-change');
+    syncEdgeHideWatch('display-change');
     log(`display change (${reason}) re-homed the marker`, { anchor });
     markerWindow.webContents.send(IPC.event.markerAnchorChanged, { anchor, edge: anchor.edge });
   };

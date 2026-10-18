@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { THEME_IDS } from '../types/app';
 import type { MarkerAppearance } from '../types/app';
+import type { EdgeHideConfig } from '../utils/edge-hide';
 import { PANEL_SIZE, PANEL_SIZE_RANGE } from '../utils/panel-geometry';
 
 /** Row keys of the `settings` table (docs/ARCHITECTURE.md §5.2). */
@@ -16,6 +17,12 @@ export const MARKER_OPACITY_RANGE = { min: 0.4, max: 1 } as const;
 /** Edge-snap threshold bounds, in DIPs (docs/FEATURES.md M01 "屏幕边缘吸附"). */
 export const MARKER_SNAP_THRESHOLD_RANGE = { min: 0, max: 80 } as const;
 export const DEFAULT_SNAP_THRESHOLD = 24;
+
+/** Edge auto-hide bounds, in DIPs (docs/FEATURES.md M01 "贴边自动隐藏", §9.4). */
+export const MARKER_HIDE_PEEK_RANGE = { min: 3, max: 8 } as const;
+export const MARKER_HIDE_REVEAL_RANGE = { min: 8, max: 64 } as const;
+export const MARKER_HIDE_EXIT_RANGE = { min: 16, max: 160 } as const;
+export const DEFAULT_MARKER_HIDE = { peek: 5, reveal: 24, exit: 48 } as const;
 
 const fieldSchemas = {
   locale: z.string().max(35),
@@ -32,6 +39,13 @@ const fieldSchemas = {
     .number()
     .min(MARKER_SNAP_THRESHOLD_RANGE.min)
     .max(MARKER_SNAP_THRESHOLD_RANGE.max),
+  markerAutoHide: z.boolean(),
+  markerHidePeek: z.number().min(MARKER_HIDE_PEEK_RANGE.min).max(MARKER_HIDE_PEEK_RANGE.max),
+  markerHideReveal: z
+    .number()
+    .min(MARKER_HIDE_REVEAL_RANGE.min)
+    .max(MARKER_HIDE_REVEAL_RANGE.max),
+  markerHideExit: z.number().min(MARKER_HIDE_EXIT_RANGE.min).max(MARKER_HIDE_EXIT_RANGE.max),
   panelWidth: z
     .number()
     .min(PANEL_SIZE_RANGE.min.width)
@@ -56,6 +70,13 @@ export const appSettingsSchema = z.object({
   markerRing: fieldSchemas.markerRing.default(true),
   markerSnap: fieldSchemas.markerSnap.default(true),
   markerSnapThreshold: fieldSchemas.markerSnapThreshold.default(DEFAULT_SNAP_THRESHOLD),
+  // Off by default, and not just for taste: the marker opens parked at the right
+  // edge (DEFAULT_MARKER_ANCHOR), so switching this on by default would greet a
+  // first-time user with a 5px sliver instead of the marker (§9.4).
+  markerAutoHide: fieldSchemas.markerAutoHide.default(false),
+  markerHidePeek: fieldSchemas.markerHidePeek.default(DEFAULT_MARKER_HIDE.peek),
+  markerHideReveal: fieldSchemas.markerHideReveal.default(DEFAULT_MARKER_HIDE.reveal),
+  markerHideExit: fieldSchemas.markerHideExit.default(DEFAULT_MARKER_HIDE.exit),
   panelWidth: fieldSchemas.panelWidth.default(PANEL_SIZE.width),
   panelHeight: fieldSchemas.panelHeight.default(PANEL_SIZE.height),
   panelAlwaysOnTop: fieldSchemas.panelAlwaysOnTop.default(true),
@@ -88,6 +109,21 @@ export function markerAppearanceOf(settings: AppSettings): MarkerAppearance {
  */
 export function markerSnapThresholdOf(settings: AppSettings): number {
   return settings.markerSnap ? settings.markerSnapThreshold : 0;
+}
+
+/**
+ * Park policy for the marker, or `null` when it stays visible (§9.4).
+ *
+ * The exit distance is forced above the reveal distance: if they cross over, the
+ * marker would park and reveal around the same cursor position and flicker.
+ */
+export function markerEdgeHideOf(settings: AppSettings): EdgeHideConfig | null {
+  if (!settings.markerAutoHide) return null;
+  return {
+    peek: settings.markerHidePeek,
+    revealDistance: settings.markerHideReveal,
+    hideDistance: Math.max(settings.markerHideExit, settings.markerHideReveal + 8),
+  };
 }
 
 /** Panel size as stored, i.e. the size the user last dragged it to. */

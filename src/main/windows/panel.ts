@@ -13,7 +13,7 @@ import { createLogger } from '../logger';
 import { isSmokeEnabled, smokeRecord } from '../platform/smoke';
 import { appSettings, updateAppSettings } from '../services/settings';
 import { loadRenderer } from './load-renderer';
-import { getMarkerWindow } from './marker';
+import { getMarkerWindow, revealMarker, setMarkerPanelVisible } from './marker';
 
 const log = createLogger('windows/panel');
 
@@ -99,7 +99,12 @@ export function expandPanel(): PanelState {
   if (marker === null || marker.isDestroyed()) return panelState;
 
   cancelCollapse();
-  const markerBounds = marker.getBounds();
+  // A marker parked at a screen edge is mostly off screen: the panel is placed
+  // from the marker's anchor, and the marker itself is brought back out so the
+  // panel is not opening next to a 5px sliver (§9.4). The rectangle `revealMarker`
+  // returns is the anchored one, which is what `placePanel` needs — the live
+  // bounds would still be the parked ones.
+  const markerBounds = revealMarker('panel-expand') ?? marker.getBounds();
   const display = screen.getDisplayNearestPoint({
     x: markerBounds.x + markerBounds.width / 2,
     y: markerBounds.y + markerBounds.height / 2,
@@ -111,6 +116,7 @@ export function expandPanel(): PanelState {
   window.moveTop();
 
   panelState = 'shown';
+  setMarkerPanelVisible(true);
   send({ state: 'expanding', durationMs: EXPAND_DURATION_MS });
   log('panel expanded', { markerBounds, panelBounds: window.getBounds() });
   smokeRecord('panel-expanded', { panelBounds: window.getBounds() });
@@ -209,6 +215,7 @@ function hidePanel(): void {
   const window = panelWindow;
   if (window !== null && !window.isDestroyed()) window.hide();
   panelState = 'hidden';
+  setMarkerPanelVisible(false);
   log('panel hidden');
   smokeRecord('panel-hidden');
 }
