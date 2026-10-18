@@ -10,7 +10,7 @@
 
 本地优先、无账号、无云端服务、15 种语言、MIT 开源。
 
-[English](README.md) · [功能模块清单](docs/FEATURES.md)
+[English](README.md) · [功能模块清单](docs/FEATURES.md) · [M0 技术方案](docs/ARCHITECTURE.md)
 
 ---
 

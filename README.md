@@ -10,7 +10,7 @@
 
 Local-first. No account. No cloud service. 15 languages. MIT licensed.
 
-[中文说明](README.zh-CN.md) · [Feature modules (中文)](docs/FEATURES.md)
+[中文说明](README.zh-CN.md) · [Feature modules (中文)](docs/FEATURES.md) · [Architecture plan (中文)](docs/ARCHITECTURE.md)
 
 ---
 
