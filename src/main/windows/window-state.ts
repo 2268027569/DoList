@@ -18,8 +18,6 @@ export const MARKER_WINDOW_FLOOR: Record<string, Size> = {
   win32: { width: 32, height: 39 },
 };
 
-export const PANEL_SIZE = { width: 380, height: 560 } as const;
-
 /** Parked near the primary display's right edge on first run. */
 export const DEFAULT_MARKER_ANCHOR: MarkerAnchor = {
   displayId: '',

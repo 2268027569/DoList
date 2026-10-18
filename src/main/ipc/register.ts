@@ -6,6 +6,7 @@ import type { IpcResult } from '@shared/types/ipc';
 import {
   markerAnchorSchema,
   markerDragStartInput,
+  panelSizeInput,
   setLocaleInput,
   smokeReportInput,
   windowAlwaysOnTopInput,
@@ -36,6 +37,7 @@ import {
   expandPanel,
   finishCollapse,
   panelStateOf,
+  resizePanel,
   setPanelAlwaysOnTop,
 } from '../windows/panel';
 
@@ -70,6 +72,12 @@ export function registerIpcHandlers(): void {
     const parsed = windowAlwaysOnTopInput.safeParse(payload);
     if (!parsed.success) return invalid('window:set-always-on-top', parsed.error.issues);
     return ok(setPanelAlwaysOnTop(parsed.data.enabled));
+  });
+
+  handle(IPC.window.resize, (payload) => {
+    const parsed = panelSizeInput.safeParse(payload);
+    if (!parsed.success) return invalid('window:resize-panel', parsed.error.issues);
+    return ok(resizePanel(parsed.data));
   });
 
   handle(IPC.marker.dragStart, (payload) => {

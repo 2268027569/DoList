@@ -7,6 +7,7 @@ import type { BootParams, ThemeId } from '@shared/types/app';
 import { applyBootParams } from '../../shared-ui/boot';
 import { changeLocale } from '../../shared-ui/i18n';
 import { usePanelStore } from './store';
+import { usePanelResize } from './use-panel-resize';
 
 const THEMES: readonly ThemeId[] = ['minimal', 'graphite'];
 const MODES = ['light', 'dark', 'system'] as const;
@@ -25,6 +26,7 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
   const [open, setOpen] = useState(false);
   const [durationMs, setDurationMs] = useState(160);
   const [alwaysOnTop, setAlwaysOnTop] = useState(true);
+  const resize = usePanelResize();
 
   useEffect(() => {
     setBoot(boot);
@@ -67,7 +69,7 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
   return (
     <div className="flex h-full w-full p-2">
       <section
-        className="panel-card flex h-full w-full flex-col gap-4 overflow-hidden rounded-[var(--panel-radius)] border border-[var(--border-default)] bg-[var(--bg-surface)] px-[var(--panel-padding)] py-[var(--panel-padding)] shadow-[var(--panel-shadow)]"
+        className="panel-card relative flex h-full w-full flex-col gap-4 overflow-hidden rounded-[var(--panel-radius)] border border-[var(--border-default)] bg-[var(--bg-surface)] px-[var(--panel-padding)] py-[var(--panel-padding)] shadow-[var(--panel-shadow)]"
         data-phase={open ? 'open' : 'closed'}
         style={{ transitionDuration: `${durationMs}ms` }}
         onTransitionEnd={handleTransitionEnd}
@@ -141,6 +143,13 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
             </Chip>
           </Row>
         </div>
+
+        {/*
+         * Decorative for assistive tech on purpose: the panel is resized with a
+         * mouse gesture only, so there is no keyboard equivalent to advertise yet.
+         * The a11y milestone owns that question.
+         */}
+        <span className="panel-resize" aria-hidden="true" onPointerDown={resize.onPointerDown} />
       </section>
     </div>
   );

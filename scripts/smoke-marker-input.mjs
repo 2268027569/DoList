@@ -51,6 +51,10 @@ const MARKER_ARTWORK_SIZE = 28;
  * requested 28×28 would be honoured; it is not.
  */
 const EXPECTED_WINDOW = { width: 32, height: 39 };
+/** The panel's configured size; frameless windows here cannot be OS-resized (§9.1.1). */
+const PANEL_SIZE = { width: 380, height: 560 };
+/** Gap the panel is placed at, from `PANEL_GAP_PX` in shared/utils/anchoring.ts. */
+const PANEL_GAP_DIP = 8;
 /** The renderer swallows clicks for 300ms after a drag (§9.2). */
 const CLICK_SUPPRESSION_BACKOFF_MS = 450;
 
@@ -468,6 +472,64 @@ async function main() {
       fail('panel window did not expand after the click');
     } else {
       pass('panel expanded next to the marker', panelEvent.detail);
+
+      // --- phase 3: panel geometry ------------------------------------------
+      // The panel is not OS-resizable (§9.1.1), so its size comes from settings
+      // and its position from `placePanel`. Both are asserted here: a panel that
+      // opened at the wrong size, or off the work area, is unusable.
+      const panelBounds = panelEvent.detail?.panelBounds ?? null;
+      const markerAfterClick = await waitForEvent('drag-end', 1, 0);
+      const markerAt =
+        markerAfterClick?.detail?.bounds ?? clickTarget ?? markerBounds();
+
+      if (panelBounds === null || markerAt === null) {
+        fail('the panel or marker bounds were not published, so the geometry is unverifiable');
+      } else {
+        if (
+          panelBounds.width === PANEL_SIZE.width &&
+          panelBounds.height === PANEL_SIZE.height
+        ) {
+          pass(
+            `panel uses the configured size ${PANEL_SIZE.width}×${PANEL_SIZE.height} ` +
+              `(frameless windows cannot be OS-resized here)`,
+          );
+        } else {
+          fail(
+            `panel is ${panelBounds.width}×${panelBounds.height}, expected ` +
+              `${PANEL_SIZE.width}×${PANEL_SIZE.height}`,
+          );
+        }
+
+        const area = display?.bounds ?? null;
+        const inside =
+          area === null ||
+          (panelBounds.x >= area.x &&
+            panelBounds.y >= area.y &&
+            panelBounds.x + panelBounds.width <= area.x + area.width &&
+            panelBounds.y + panelBounds.height <= area.y + area.height);
+        if (inside) {
+          pass('panel opened fully inside the work area', { panelBounds });
+        } else {
+          fail(`panel opened outside the work area: ${JSON.stringify(panelBounds)}`);
+        }
+
+        // Adjacency: the panel opens beside the marker it was launched from,
+        // never on top of it.
+        const gapX = Math.min(
+          Math.abs(panelBounds.x - (markerAt.x + markerAt.width)),
+          Math.abs(markerAt.x - (panelBounds.x + panelBounds.width)),
+        );
+        const overlapsVertically =
+          panelBounds.y < markerAt.y + markerAt.height &&
+          markerAt.y < panelBounds.y + panelBounds.height;
+        if (overlapsVertically && gapX <= PANEL_GAP_DIP * 2) {
+          pass(`panel sits beside the marker (gap ${gapX} DIP)`, { markerAt, panelBounds });
+        } else {
+          fail(
+            `panel is not beside the marker: gap ${gapX} DIP, marker ${JSON.stringify(markerAt)}`,
+          );
+        }
+      }
     }
   } finally {
     await new Promise((resolve) => setTimeout(resolve, 400));

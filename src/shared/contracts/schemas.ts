@@ -13,6 +13,16 @@ export const markerAnchorSchema = z.object({
 
 export const windowAlwaysOnTopInput = z.object({ enabled: z.boolean() });
 
+/**
+ * A resize-handle target size. Only sanity-checked here: the size *range* is
+ * enforced by `clampPanelSize` in the main process, because rejecting an
+ * overshoot would turn ordinary dragging past a bound into an IPC error.
+ */
+export const panelSizeInput = z.object({
+  width: z.number().finite().positive().max(10_000),
+  height: z.number().finite().positive().max(10_000),
+});
+
 export const markerSetAnchorInput = z.object({ anchor: markerAnchorSchema });
 
 /**

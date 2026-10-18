@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import { THEME_IDS } from '../types/app';
 import type { MarkerAppearance } from '../types/app';
+import { PANEL_SIZE, PANEL_SIZE_RANGE } from '../utils/panel-geometry';
 
 /** Row keys of the `settings` table (docs/ARCHITECTURE.md §5.2). */
 export const SETTINGS_KEY = {
@@ -31,6 +32,14 @@ const fieldSchemas = {
     .number()
     .min(MARKER_SNAP_THRESHOLD_RANGE.min)
     .max(MARKER_SNAP_THRESHOLD_RANGE.max),
+  panelWidth: z
+    .number()
+    .min(PANEL_SIZE_RANGE.min.width)
+    .max(PANEL_SIZE_RANGE.max.width),
+  panelHeight: z
+    .number()
+    .min(PANEL_SIZE_RANGE.min.height)
+    .max(PANEL_SIZE_RANGE.max.height),
   panelAlwaysOnTop: z.boolean(),
 };
 
@@ -47,6 +56,8 @@ export const appSettingsSchema = z.object({
   markerRing: fieldSchemas.markerRing.default(true),
   markerSnap: fieldSchemas.markerSnap.default(true),
   markerSnapThreshold: fieldSchemas.markerSnapThreshold.default(DEFAULT_SNAP_THRESHOLD),
+  panelWidth: fieldSchemas.panelWidth.default(PANEL_SIZE.width),
+  panelHeight: fieldSchemas.panelHeight.default(PANEL_SIZE.height),
   panelAlwaysOnTop: fieldSchemas.panelAlwaysOnTop.default(true),
 });
 
@@ -77,4 +88,9 @@ export function markerAppearanceOf(settings: AppSettings): MarkerAppearance {
  */
 export function markerSnapThresholdOf(settings: AppSettings): number {
   return settings.markerSnap ? settings.markerSnapThreshold : 0;
+}
+
+/** Panel size as stored, i.e. the size the user last dragged it to. */
+export function panelSizeOf(settings: AppSettings): { width: number; height: number } {
+  return { width: settings.panelWidth, height: settings.panelHeight };
 }

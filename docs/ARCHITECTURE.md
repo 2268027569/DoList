@@ -85,11 +85,11 @@ toDoList/
 
 **两条结构性决定**：
 
-1. **两个渲染入口**（`panel/index.html`、`marker/index.html`），不做单入口路由。标记页零依赖 React、零依赖 i18next，只加载约 16 kB 的 DOM + CSS + 静态文案，保证常驻内存与 CPU 最低。
+1. **两个渲染入口**（`panel/index.html`、`marker/index.html`），不做单入口路由。标记页零依赖 React、零依赖 i18next，只加载约 23 kB 的 DOM + CSS + 静态文案，保证常驻内存与 CPU 最低。
 
    M0 实测产物：`marker.js 5.26 kB + marker.css 7.78 kB`（另需共享 i18n chunk 85.26 kB）、`panel.js 587.45 kB + panel.css 19.74 kB`、`main 377.85 kB`、`preload 3.36 kB`。
 
-   M01 实测产物：常驻标记路径为 `marker.js 5.63 kB + marker.css 7.78 kB + common chunk 2.68 kB = 16.09 kB`，i18next（约 82 kB）已完全移出常驻路径，只随面板打包（`panel.js 587.45 → 669.95 kB`、`panel.css 19.74 → 19.81 kB`）；`main 379.86 kB`、`preload 3.37 kB`。ICU 打包（78.13 kB，`es-*.js`）仍由 i18next-icu 动态 import 承担，只有面板按需加载。
+   M01 实测产物：常驻标记路径为 `marker.js 7.15 kB + marker.css 10.98 kB + common chunk 5.10 kB = 23.23 kB`（形态/角标/进度环与拖拽桥都在其中），i18next 已完全移出常驻路径，只随面板打包（`panel.js 587.45 → 673.04 kB`、`panel.css 19.74 → 21.80 kB`）；`main 384.07 kB`、`preload 3.74 kB`。ICU 打包（78.13 kB，`es-*.js`）仍由 i18next-icu 动态 import 承担，只有面板按需加载。
 2. **`src/shared` 只放纯函数与类型**，不 import `electron`、不 import Node 内置模块；这样吸附算法、RRULE、格式化函数可以直接被 Vitest 单测覆盖，也能被两个渲染入口共用。
 
 ---
@@ -398,7 +398,7 @@ theme: { extend: { colors: {
 
 | 参数 | 标记窗口 | 面板窗口 |
 |---|---|---|
-| 尺寸 | 圆点 28×28；胶囊 56×28；图标 40×40（可缩放 0.8–1.5） | 宽 360–420，高自适应上限 560 |
+| 尺寸 | 美术尺寸（`MARKER_ARTWORK`）：圆点 28×28；胶囊 56×28；图标 40×40；随 `markerScale` 缩放 0.8–1.5。**窗口尺寸 = max(美术尺寸, 平台下限)**，win32 下限 32×39（§9.1.1），darwin 无下限 | 宽 320–640，高 420–900，默认 380×560 |
 | `frame` / `transparent` | `false` / `true` | `false` / `true` |
 | `backgroundColor` | `#00000000` | 主题底色（避免首帧闪白） |
 | `skipTaskbar` | `true` | `true` |
@@ -422,7 +422,7 @@ theme: { extend: { colors: {
 | **`element.setPointerCapture` 是必需的**——窗口只有 32×39，一旦去掉捕获，指针离开窗口后 Chromium 立刻停止投递 `pointermove`，拖拽**根本无法成立**（`drag-start` 不再出现） | 去掉捕获的对照跑：光标轨迹干净但 3 次尝试全部"no drag events" |
 | **Chromium 在「捕获态拖拽 + 窗口移动」时会 warp 系统光标**——窗口每移动一次，系统光标会被再定位一次，故中途回读光标值不能当作手的真实位置 | 同一份代码，静止窗口跑 2 次光标轨迹与脚本路径**逐点完全一致**；移动窗口时则随机出现跳变（如 `1649,765 → 1837,755`）。M01 已量化并判定无害，见 §9.2.1 |
 
-**因此窗口尺寸的处理方式**：`MARKER_ARTWORK_SIZE = 28` 只是美术尺寸；窗口尺寸走 `markerWindowSize()`（win32 = 32×39，darwin = 28×28），创建后回读 `getBounds()` 并按**实际**尺寸重算锚点位置，保证圆点在窗口内居中、锚点数学始终自洽。
+**因此窗口尺寸的处理方式**：`MARKER_ARTWORK` 只是美术尺寸；窗口尺寸走 `markerWindowSize()` = `max(美术尺寸 × 缩放, 平台下限)`，创建后回读 `getBounds()` 并按**实际**尺寸重算锚点位置，保证美术图形在窗口内居中、锚点数学始终自洽。形态/缩放变化时按新尺寸重算窗口并推送渲染层（§9.8）。
 
 **冒烟脚本的工程细节**（脚本自身踩过的坑）：拖拽判据**不能**用中途回读的光标——它被 warp 带偏，会把应用缺陷判成通过，也可能把正确的运行判成失败；正确做法是用「手的净位移 + 起始 bounds」做端到端断言。点击阶段必须瞄准**拖拽之后**的实际位置（启动快照已过期），并等 > 450ms 避开渲染层的 300ms 点击抑制；合成 `mouse_event` 的按下偶发不生效（约 1/6 次），需要有限次重试；冒烟模式下标记窗口强制从默认锚点起步，避免上一轮持久化的位置把标记推出工作区。
 
@@ -453,7 +453,8 @@ Chromium 在「指针捕获 + 窗口移动」时会重新定位系统光标（§
 
 ### 9.3 吸附与位置持久化
 
-- 吸附：拖拽结束时用 `screen.getDisplayNearestPoint()` 取所在显示器与 `workArea`（已扣除任务栏/Dock），距边缘 < 24px 即吸附到该边。
+- 吸附：拖拽结束时用 `screen.getDisplayNearestPoint()` 取所在显示器与 `workArea`（已扣除任务栏/Dock），距边缘小于阈值（设置项 `markerSnapThreshold`，默认 24px）即吸附到该边。
+- **阈值 0 即"关闭吸附"**：`snapToWorkArea` 的阈值只控制"是否吸附到边"，为 0 时永不命中，函数退化为纯粹的"clamp 回工作区"，此时拖拽结束产出的是 `free` 锚点，经 `fromAnchor` 原样还原——所以"关掉吸附"不需要第二条代码路径，只需把 `markerSnapThresholdOf()` 的返回值压成 0。
 - 持久化用**锚点**而不是绝对坐标：记录 `{ displayId, edge, offsetFromEdge, ratioAlongEdge }`。显示器分辨率或任务栏高度变化时，按比例与边缘锚点还原，比存绝对 x/y 稳得多。
 - 显示器变化监听：`display-added` / `display-removed` / `display-metrics-changed` → 若标记落在所有 `workArea` 之外，移回主屏右下角并提示一次。
 - 最小可见性保证：面板展开位置根据标记所在边自动避让（如标记贴右边缘则面板向左展开），并在计算后 clamp 到 `workArea` 内。
@@ -481,6 +482,7 @@ Chromium 在「指针捕获 + 窗口移动」时会重新定位系统光标（§
 
 - 收起时反向播完再 `hide()`（监听 `animationend`，加 50ms 兜底超时防卡死），避免窗口在动画中途消失造成"截断感"。
 - 只动 `transform` / `opacity`（合成层属性），不触发重排；`will-change` 仅在动画期间临时添加，动画结束移除。
+- **M01 落地实现**：用 CSS `transition` 而非 Web Animations——展开 200ms、收起 180ms（都在 180–220ms 区间内），`transform` 走带轻微过冲的 `--ease-spring: cubic-bezier(.34, 1.42, .5, 1)`，`opacity` 走普通缓动（对不透明度做过冲只会被 1 截断，没有收益）。收起结束由渲染层 `transitionend` 回报 `window:collapse-finished`，主进程另有 400ms 兜底定时器（§9.6）；`prefers-reduced-motion` 下把时长压到 1ms。
 - 低耗档（设置里的"极致省电"）：跳过缩放动画，直接 show/hide，并禁用毛玻璃——这是给低配机与电池模式准备的降级路径。
 - 毛玻璃：默认关闭，开启时限制作用面积（仅面板背景一层），并提供"性能优先"自动降级（检测到动画掉帧或用户手动切换）。
 
@@ -499,6 +501,35 @@ Chromium 在「指针捕获 + 窗口移动」时会重新定位系统光标（§
 | 标记窗口内存 | 显著低于独立 React 窗口（页数越多越明显） | 进程资源监视 |
 | 展开/收起动画 | 不丢帧（60fps） | DevTools Performance 录制 |
 | 面板隐藏后的渲染开销 | 停止（后台节流） | `backgroundThrottling: true` |
+
+### 9.8 标记外观与状态推送（M01）
+
+**单一输入源**：标记渲染层不自己算任何东西。主进程把「外观（来自设置）+ 计数（来自任务表）」合成一个 `MarkerStatePayload`，经 `event:marker-state` 推送；渲染层只负责把它写成 DOM 属性与 CSS 自定义属性。
+
+| 字段 | 来源 | 渲染层落点 |
+|---|---|---|
+| `appearance.shape` / `scale` | `markerShape` / `markerScale` | `element.dataset.shape`、`--marker-w/--marker-h` |
+| `appearance.opacity` | `markerOpacity` | `--marker-opacity`（悬停时 CSS 强制回到 1） |
+| `appearance.tint` | `markerTint` | `html.dataset.markerTint` → 令牌层选中 `--marker-tint` / `--marker-on-tint` |
+| `appearance.badgeMode` → `badge` | 计数 | `element.dataset.badge` + 数字文本；`0` 即隐藏 |
+| `progress` / `risk` | 今日完成率 / 逾期与临期计数 | `--marker-progress`、`html.dataset.markerRisk` |
+
+**为什么外观也要走 boot query**：窗口是**先按外观定尺寸、后创建渲染层**的。若首帧才知道形态，就会出现"窗口已是胶囊、画面还是圆点"的闪一下（§7 防闪白同理）。故 `BootParams.marker` 在 `bootQuery()` 里编成一个 6 字段 token，`main.ts` 先按它画第一帧，`marker-state` 到达后再校正。
+
+**颜色一律不在渲染层出现**：`marker.css` 只写 `var(--marker-tint)` 这类变体名，具体色值由 `tokens.css` 按 `data-*` 属性选中；`scripts/check-tokens.mjs` 在 CI 里兜底（§7）。形态/缩放变化会触发窗口重算尺寸（§9.1）与重新推送，无需重启。
+
+**胶囊的进度不能用"环色→填充色"渐变**：默认 accent 调色板下 `--marker-ring` 与 `--marker-tint` 是同一个绿色，两色渐变会变成一块纯色、进度不可见。故胶囊的"未完成"部分用 `--marker-ring-track`（半透明中性色），已完成部分保留 `--marker-tint`。
+
+**`--marker-ring-track` 为什么不是主题边框色**：标记浮在**桌面**上，不在任何主题表面上，浅灰边框色在浅色壁纸下等于隐形。改用随 `data-mode` 翻转的半透明中性色（light 下 `rgba(0,0,0,.3)`、dark 下 `rgba(255,255,255,.38)`），与面板阴影同一套思路，无需采样壁纸。
+
+### 9.9 面板尺寸记忆与"伪 resize"（M01）
+
+面板窗口 `resizable: false`——Windows 上无边框透明窗口只有在 `thickFrame: true`（即带系统边框）时才有可拖拽的 resize 边框，那正是我们要避免的（§9.1.1）。因此：
+
+- 渲染层右下角画一个 grip，`pointerdown` 后自己算目标尺寸（**从手势起点量**，不读 `innerWidth`——那是本次手势的输出，回读会自我漂移），节流 32ms 上报 `window:resize-panel`。
+- 主进程用 `clampPanelSize()` 夹到 320–640 × 420–900，再用 `snapToWorkArea(..., 阈值 0)` 把位置 clamp 回工作区（此处不需要吸附语义，只是"别跑出屏幕"），最后 `setBounds`。左上角保持不动。
+- 尺寸在停手 250ms 后防抖写入设置（`panelWidth` / `panelHeight`）；**位置不存**——每次展开都由 `placePanel()` 依标记重新推导，存了反而会和标记位置打架。
+- 设置里的尺寸在下次创建窗口时生效。
 
 ---
 
@@ -558,9 +589,10 @@ CI 门槛：`lint` + `typecheck` + `test` + `i18n:check` + 主题令牌静态检
 
 1. **葡萄牙语基准**：`pt` 统一（巴西为主）还是区分 `pt-BR` / `pt-PT`？（我建议首发只做 `pt`，巴西葡萄牙语为基准）
 2. **面板是否默认置顶**：默认置顶会遮挡其他窗口，但符合"随手记"的直觉；我建议默认置顶且可关闭。
-3. **标记默认形态**：我建议圆点 28×28，悬停时显示进度环。
+3. ~~标记默认形态~~ → **已实现**：圆点 28×28，`markerBadge` 默认 `open`、`markerRing` 默认开；形态/缩放/透明度/配色均可在设置里改（§9.8）。
 4. **是否允许面板出现在任务栏**：我建议两个窗口都不进任务栏，只留托盘。
 5. **默认快捷键**：我建议唤起/隐藏 `Ctrl/Cmd+Shift+Space`、快速新增 `Ctrl/Cmd+Shift+N`（避开系统占用）。
 6. **数据目录默认位置**：默认放应用数据目录（`%APPDATA%\YiChen ToDo` / `~/Library/Application Support/YiChen ToDo`），还是首次启动让用户自选（便于放进同步文件夹）？我建议默认放系统目录 + 设置页可改。
+7. **[需你拍板] M01「全桌面拖拽」的实现手段偏离**：FEATURES.md 原文写"系统原生拖拽，不用 JS 逐帧计算坐标"，但 Windows 原生拖拽（`HTCAPTION`）会让窗口再也收不到鼠标事件，直接毁掉同为 P0 的"点击展开"与 P1 的"右键菜单"。我已在 M01 采用 JS 拖拽（主进程 16ms 采样真实光标，§9.2 / §9.2.1），**产品行为不变**（全桌面平滑拖拽、Δ 0 DIP），仅实现手段偏离。请确认是否接受；若不接受，需要重新评估"点击展开"的优先级。
 
-确认后，M0 进入脚手架落地（`git init` 已完成，下一步是 electron-vite 初始化 + 双入口验证）。
+M0 脚手架与冒烟验证已完成；当前处于 M01（隐形标记）。

@@ -19,6 +19,11 @@ export const IPC = {
     /** Renderer -> main: collapse animation finished, hide the window. */
     collapseFinished: 'window:collapse-finished',
     setAlwaysOnTop: 'window:set-always-on-top',
+    /**
+     * Renderer -> main: the resize handle reports a target size. The main process
+     * is the one that clamps it to the work area and persists it (windows/panel.ts).
+     */
+    resize: 'window:resize-panel',
   },
   marker: {
     /** Renderer -> main: pointer moved past the drag threshold. */

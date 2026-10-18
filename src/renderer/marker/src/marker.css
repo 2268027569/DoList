@@ -82,7 +82,13 @@
   opacity: 1;
 }
 
-/* A capsule cannot carry a circular ring; its progress is a fill instead. */
+/*
+ * A capsule cannot carry a circular ring; its progress is a fill instead.
+ *
+ * The *remaining* portion uses the track colour, not the tint: for the default
+ * accent palette `--marker-ring` and `--marker-tint` are the same green, so a
+ * ring-to-tint gradient would be a flat block and the progress invisible.
+ */
 .marker[data-shape='pill'] .marker__ring {
   display: none;
 }
@@ -90,16 +96,16 @@
 .marker[data-shape='pill'][data-ring='on'] .marker__core {
   background: linear-gradient(
     to right,
-    var(--marker-ring) calc(var(--marker-progress, 0) * 1%),
-    var(--marker-tint) 0
+    var(--marker-tint) calc(var(--marker-progress, 0) * 1%),
+    var(--marker-ring-track) 0
   );
 }
 
 :root[dir='rtl'] .marker[data-shape='pill'][data-ring='on'] .marker__core {
   background: linear-gradient(
     to left,
-    var(--marker-ring) calc(var(--marker-progress, 0) * 1%),
-    var(--marker-tint) 0
+    var(--marker-tint) calc(var(--marker-progress, 0) * 1%),
+    var(--marker-ring-track) 0
   );
 }
 

@@ -3,15 +3,17 @@ import { join } from 'node:path';
 
 import { IPC } from '@shared/contracts/channels';
 import type { PanelStatePayload } from '@shared/contracts/channels';
+import { panelSizeOf } from '@shared/contracts/settings';
 import { TRANSPARENT_WINDOW_BACKGROUND } from '@shared/theme/window-background';
 import type { BootParams, PanelState } from '@shared/types/app';
-import { placePanel } from '@shared/utils/anchoring';
+import { placePanel, snapToWorkArea } from '@shared/utils/anchoring';
+import { clampPanelSize, PANEL_SIZE } from '@shared/utils/panel-geometry';
+import type { Size } from '@shared/utils/marker-geometry';
 import { createLogger } from '../logger';
-import { smokeRecord } from '../platform/smoke';
-import { appSettings } from '../services/settings';
+import { isSmokeEnabled, smokeRecord } from '../platform/smoke';
+import { appSettings, updateAppSettings } from '../services/settings';
 import { loadRenderer } from './load-renderer';
 import { getMarkerWindow } from './marker';
-import { PANEL_SIZE } from './window-state';
 
 const log = createLogger('windows/panel');
 
@@ -23,11 +25,14 @@ const COLLAPSE_DURATION_MS = 180;
 const COLLAPSE_DELAY_MS = 150;
 /** Safety net if the renderer never reports its collapse animation as finished. */
 const COLLAPSE_FALLBACK_MS = 400;
+/** How long the resize handle must be still before the new size is written. */
+const PANEL_SIZE_PERSIST_DEBOUNCE_MS = 250;
 
 let panelWindow: BrowserWindow | null = null;
 let panelState: PanelState = 'hidden';
 let collapseTimer: NodeJS.Timeout | null = null;
 let fallbackTimer: NodeJS.Timeout | null = null;
+let persistSizeTimer: NodeJS.Timeout | null = null;
 
 export function getPanelWindow(): BrowserWindow | null {
   return panelWindow;
@@ -38,9 +43,15 @@ export function panelStateOf(): PanelState {
 }
 
 export function createPanelWindow(boot: BootParams): BrowserWindow {
+  // The smoke harness always starts from the default size, for the same reason it
+  // starts from the default anchor: a persisted size would make the run depend on
+  // what the last run did.
+  const smoke = isSmokeEnabled();
+  const size = smoke ? PANEL_SIZE : clampPanelSize(panelSizeOf(appSettings()));
+
   const window = new BrowserWindow({
-    width: PANEL_SIZE.width,
-    height: PANEL_SIZE.height,
+    width: size.width,
+    height: size.height,
     show: false,
     frame: false,
     transparent: true,
@@ -94,7 +105,7 @@ export function expandPanel(): PanelState {
     y: markerBounds.y + markerBounds.height / 2,
   });
 
-  window.setBounds(placePanel(markerBounds, PANEL_SIZE, display.workArea));
+  window.setBounds(placePanel(markerBounds, currentPanelSize(window), display.workArea));
   if (!window.isVisible()) window.show();
   window.focus();
   window.moveTop();
@@ -141,6 +152,56 @@ export function setPanelAlwaysOnTop(enabled: boolean): boolean {
   window.setAlwaysOnTop(enabled);
   log('panel always-on-top set', { enabled });
   return enabled;
+}
+
+/**
+ * Applies a size reported by the renderer's resize handle (docs/FEATURES.md M01
+ * "面板形态"). The top-left corner stays put — the panel's *position* is not
+ * stored at all: `placePanel` re-derives it from the marker on every expand, so
+ * only the size is worth remembering.
+ *
+ * Returns the size that was actually applied, which may be smaller than requested
+ * because it was clamped to the size range or to the work area.
+ */
+export function resizePanel(target: Size): Size {
+  const window = panelWindow;
+  if (window === null || window.isDestroyed()) return clampPanelSize(target);
+
+  const bounds = window.getBounds();
+  const display = screen.getDisplayNearestPoint({
+    x: bounds.x + bounds.width / 2,
+    y: bounds.y + bounds.height / 2,
+  });
+  const wanted = { x: bounds.x, y: bounds.y, ...clampPanelSize(target) };
+  // A zero threshold only clamps back inside the work area, which is exactly what
+  // growing a panel towards a screen edge needs (no edge snapping here — the panel
+  // is not free-floating, it is anchored to the marker).
+  const clamped = snapToWorkArea({ x: wanted.x, y: wanted.y, width: wanted.width, height: wanted.height }, display.workArea, 0);
+  const applied: Size = { width: wanted.width, height: wanted.height };
+  window.setBounds({
+    x: Math.round(clamped.x),
+    y: Math.round(clamped.y),
+    width: applied.width,
+    height: applied.height,
+  });
+
+  schedulePersistPanelSize(applied);
+  return applied;
+}
+
+/** The panel's live size, or the stored one before the window exists. */
+function currentPanelSize(window: BrowserWindow): Size {
+  const bounds = window.getBounds();
+  return { width: bounds.width, height: bounds.height };
+}
+
+function schedulePersistPanelSize(size: Size): void {
+  if (persistSizeTimer !== null) clearTimeout(persistSizeTimer);
+  persistSizeTimer = setTimeout(() => {
+    persistSizeTimer = null;
+    updateAppSettings({ panelWidth: size.width, panelHeight: size.height });
+    log('panel size persisted', size);
+  }, PANEL_SIZE_PERSIST_DEBOUNCE_MS);
 }
 
 function hidePanel(): void {
