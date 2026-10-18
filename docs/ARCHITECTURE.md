@@ -86,6 +86,10 @@ toDoList/
 **两条结构性决定**：
 
 1. **两个渲染入口**（`panel/index.html`、`marker/index.html`），不做单入口路由。标记页零依赖 React，只加载几十 KB 的 DOM + CSS，保证常驻内存与 CPU 最低。
+
+   M0 实测产物：`marker.js 5.26 kB + marker.css 7.78 kB`（另需共享 i18n chunk 85.26 kB）、`panel.js 587.45 kB + panel.css 19.74 kB`、`main 377.85 kB`、`preload 3.36 kB`；ICU 打包（78.13 kB）由 i18next-icu 动态 import 承担，只有面板按需加载。
+
+   **M01 待优化**：常驻的标记窗口目前也加载 85.26 kB 的 i18next 共享 chunk，只为一条 `marker.tooltip` 文案；标记入口应改为只取 `marker` 命名空间的静态文案，把共享 chunk 从常驻路径上摘掉。
 2. **`src/shared` 只放纯函数与类型**，不 import `electron`、不 import Node 内置模块；这样吸附算法、RRULE、格式化函数可以直接被 Vitest 单测覆盖，也能被两个渲染入口共用。
 
 ---
@@ -405,6 +409,22 @@ theme: { extend: { colors: {
 
 **关键取舍**：标记窗口**不能**用 `setIgnoreMouseEvents`——那是点击穿透，会让标记彻底点不到。
 
+#### 9.1.1 实测结论（M0，Windows 11 · 1920×1080 · scale 1 · Electron 44.9.0）
+
+用 `scripts/smoke-marker-input.mjs`（`npm run smoke:marker`）驱动真实系统光标，结论如下：
+
+| 结论 | 证据 |
+|---|---|
+| **非聚焦透明窗口能收到指针事件**——`focusable: false` + `skipTaskbar: true` + `transparent: true` 下 `pointerdown / pointermove / pointerup` 全部到达渲染层，拖拽与单击展开均可用 | `drag-start`(ticks 12–19) → `drag-end` → `expand` → `panel-expanded` 全链路贯通；`--focusable` 对照跑同样 7/7 通过 |
+| **系统光标坐标与 Electron DIP 一致**——按所在显示器 `scaleFactor` 换算后，窗口落点与 `screen.getCursorScreenPoint()` 的偏差为 **0 DIP** | 期望值由"OS 实报光标 − 抓取偏移"推出，实测差值 ≤ 6 DIP 判据下取到 0 |
+| **Windows 会强制放大透明无边框顶层窗口**——请求 28×28 一律得到 **32×39 DIP**；换成不透明窗口则为 32×31（`thickFrame: false` 无效，已放弃该尝试） | 临时探针逐一试了 10 组参数组合，只有 `transparent: true` 稳定得到 32×39 |
+| **`element.setPointerCapture` 是必需的**——窗口只有 32×39，一旦去掉捕获，指针离开窗口后 Chromium 立刻停止投递 `pointermove`，拖拽**根本无法成立**（`drag-start` 不再出现） | 去掉捕获的对照跑：光标轨迹干净但 3 次尝试全部"no drag events" |
+| **Chromium 在"捕获态拖拽 + 窗口移动"时会 warp 系统光标**——窗口每移动一次，系统光标会被再定位一次；当本进程的采样循环与它错拍时，逐帧误差会叠加，光标轨迹出现肉眼可见的乱走 | 同一份代码，静止窗口跑 2 次光标轨迹与脚本路径**逐点完全一致**；移动窗口时则随机出现跳变（如 `1649,765 → 1837,755`）。详见 §9.2 待决项 |
+
+**因此窗口尺寸的处理方式**：`MARKER_ARTWORK_SIZE = 28` 只是美术尺寸；窗口尺寸走 `markerWindowSize()`（win32 = 32×39，darwin = 28×28），创建后回读 `getBounds()` 并按**实际**尺寸重算锚点位置，保证圆点在窗口内居中、锚点数学始终自洽。
+
+**冒烟脚本的工程细节**（脚本自身踩过的坑）：期望位置必须用 **OS 实报光标**而不是脚本设定值来算（否则会把 warp 误判成应用缺陷）；每次拖拽前校验光标是否真的走完了脚本路径，未走完则重试；点击阶段要等 > 350ms 避开渲染层的 300ms 点击抑制；冒烟模式下标记窗口从默认锚点起步，避免上一轮持久化的位置把标记推出工作区。
+
 ### 9.2 拖拽与点击为什么不用 `-webkit-app-region: drag`
 
 标记要同时支持"拖动"和"单击展开"，而 `-webkit-app-region: drag` 的区域内**点击事件会被系统吞掉**（Electron 已知行为）。因此标记采用 JS 拖拽：
@@ -414,6 +434,17 @@ theme: { extend: { colors: {
 3. 抬起时：位移 < 阈值且时长 < 300ms 判定为**单击**（展开面板），否则判定为拖拽结束并触发吸附；
 4. 拖拽期间不写任何 DOM 之外的状态，结束才落盘，避免频繁 IO；
 5. `drag` 只在用户按住期间跑 rAF，空闲零开销。
+6. **抓取点**：渲染层在 `pointerdown` 记录屏幕坐标并随 `marker:drag-start` 上报，主进程用它算偏移（`offset = grab − windowBounds`），而不是用"识别出拖拽那一刻"的光标位置——否则标记会在起步瞬间跳过一个 4px 阈值。
+
+#### 9.2.1 待决项：捕获态下移动窗口会 warp 系统光标（M01）
+
+Chromium 在"指针捕获 + 窗口移动"时会重新定位系统光标（§9.1.1 已实测）。按设计 `offset = grab − windowBounds`，窗口始终贴在光标下方，这个 warp 在稳态下应当是**空操作**；但它与本进程 16ms 采样错拍时会产生逐帧误差并叠加，表现为拖拽过程中光标（进而标记）抖动、长时间拖拽后光标偏离物理鼠标位置。
+
+已知约束与候选方向（M01 定稿，冒烟脚本可复现）：
+
+- `setPointerCapture` 不能去掉（去掉就没有 `pointermove`），所以只能在"如何算窗口位置"上做文章。
+- 渲染层 `pointermove` 的 `screenX/screenY` 与窗口相对坐标**不受** warp 影响（warp 保持窗口内相对位置），因此"以渲染层上报的增量驱动窗口"是一条可用路线；代价是渲染层节流时精度下降，与 §9.2 第 2 条"主进程读真实光标"的初衷相反，需要用实测对比决定取舍。
+- 兜底方案：拖拽期间限制单帧位移上限（例如 200 DIP/帧），把叠加误差截断成肉眼不可见的抖动。
 
 ### 9.3 吸附与位置持久化
 
@@ -507,13 +538,14 @@ CI 门槛：`lint` + `typecheck` + `test` + `i18n:check` + 主题令牌静态检
 
 | 风险 | 影响 | 应对 |
 |---|---|---|
-| 非聚焦透明窗口在 Windows/macOS 上的鼠标事件行为不一致 | 标记点不到或拖不动 | M1 第一件事就是冒烟验证；备选：`focusable: true` + 立即 `blur()` |
+| ~~非聚焦透明窗口在 Windows/macOS 上的鼠标事件行为不一致~~ → **已在 M0 实测排除（Windows）** | ~~标记点不到或拖不动~~ | 结论见 §9.1.1：事件全通、坐标一致；macOS 待 M01 用同一脚本复测 |
+| 捕获态拖拽时 Chromium 会 warp 系统光标（§9.1.1 实测） | 拖拽抖动、长拖拽后光标偏离物理鼠标 | 见 §9.2.1 候选方向；M01 定稿并有冒烟脚本可复现 |
 | Windows 上置顶窗口压不过全屏独占应用（游戏/演示） | 标记被遮挡 | 记为已知限制，不做注入式覆盖（不越界） |
-| better-sqlite3 原生模块编译/ABI 问题 | 数据库直接不可用 | `npmRebuild` + `asarUnpack`；备选：Electron 内置 `node:sqlite`（实验性）或 `sql.js`（内存库 + 手动落盘，性能下降） |
+| better-sqlite3 原生模块编译/ABI 问题 | 数据库直接不可用 | **M0 已验证**：开发态（`electron-builder install-app-deps` 重建）与打包态（`npm run pack` → `release/win-unpacked`，`asarUnpack` 生效，启动日志 `database ready`）均可打开 WAL 库；备选：Electron 内置 `node:sqlite`（实验性）或 `sql.js`（内存库 + 手动落盘，性能下降） |
 | 两台设备时钟偏差导致同步误判 | 冲突合并顺序错 | `(updated_at, device_id)` LWW + 偏移检测 + 保留双份；文档明示局限 |
 | 签名证书与公证周期 | 阻塞 v1.0 发布 | 尽早申请（Windows 证书审批可能数日；macOS 需 Apple Developer 账号） |
 | 透明窗口在部分显卡驱动下的渲染瑕疵 | 视觉毛刺 | 提供"关闭透明/毛玻璃"开关作为兜底 |
-| 两个渲染入口的构建配置复杂化 | 脚手架阶段踩坑 | M0 就用最小示例验证双入口构建与产物，不等到 M1 |
+| ~~两个渲染入口的构建配置复杂化~~ → **M0 已验证** | ~~脚手架阶段踩坑~~ | 双入口 + 生产 CSP 注入已跑通，见 §2 实测产物 |
 
 ---
 
