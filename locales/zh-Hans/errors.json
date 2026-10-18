@@ -1,0 +1,5 @@
+{
+  "unknown": "出问题了。",
+  "db.title": "无法打开数据库",
+  "db.message": "YiChen ToDo 将数据保存在本地 SQLite 文件：{path}。没有它应用无法启动。"
+}

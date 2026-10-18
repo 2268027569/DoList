@@ -1,0 +1,11 @@
+node_modules/
+out/
+dist/
+release/
+coverage/
+resources/
+build/
+*.sql
+*.json
+locales/
+CHANGELOG.md

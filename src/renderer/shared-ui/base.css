@@ -1,0 +1,35 @@
+/*
+ * Base stylesheet shared by both renderer entries: theme tokens plus the reset
+ * that a frameless transparent window needs. Deliberately free of Tailwind and
+ * of any component rule — the marker loads this file only, so the permanently
+ * resident window never pays for the panel's utility sheet (§2, §7).
+ */
+@import '../../shared/theme/tokens.css';
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  /* Both windows are transparent: the surface is painted by the entry itself. */
+  background: transparent;
+  font-family: var(--font-sans);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  /* Chrome/Electron text selection inside a floating panel looks broken. */
+  user-select: none;
+  cursor: default;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

@@ -32,9 +32,11 @@ jobs:
             echo "::notice title=Scaffold pending::package.json 尚未创建，已跳过构建校验。"
           fi
 
+      # --ignore-scripts 跳过 postinstall（Electron 二进制下载 + 原生模块重建）；
+      # 本 job 只做静态检查与纯 Node 单测，不需要这些运行时产物。
       - name: Install dependencies
         if: steps.scaffold.outputs.ready == '1'
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Lint
         if: steps.scaffold.outputs.ready == '1'

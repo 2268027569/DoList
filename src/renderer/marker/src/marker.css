@@ -1,0 +1,67 @@
+/*
+ * Marker stylesheet. Hand-written and tiny on purpose: this window is always
+ * resident, so it must not carry the panel's utility framework (§2).
+ */
+@import '../../shared-ui/base.css';
+
+.marker-dot {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform 120ms var(--ease-emphasized);
+}
+
+.marker-dot:hover {
+  transform: scale(1.08);
+}
+
+.marker-dot__core,
+.marker-dot__ring {
+  grid-area: 1 / 1;
+  border-radius: 999px;
+}
+
+.marker-dot__core {
+  width: calc(var(--marker-size) - 8px);
+  height: calc(var(--marker-size) - 8px);
+  background: var(--accent);
+  box-shadow: var(--marker-shadow);
+}
+
+/* Hover ring: a conic track that M01 fills with today's completion ratio. */
+.marker-dot__ring {
+  width: var(--marker-size);
+  height: var(--marker-size);
+  background: conic-gradient(
+    var(--accent) calc(var(--marker-progress, 0) * 1%),
+    var(--accent-soft) calc(var(--marker-progress, 0) * 1%)
+  );
+  /* The mask below is an alpha channel, not a palette colour. */
+  -webkit-mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - var(--marker-ring-width)),
+    black calc(100% - var(--marker-ring-width))
+  );
+  mask: radial-gradient(
+    farthest-side,
+    transparent calc(100% - var(--marker-ring-width)),
+    black calc(100% - var(--marker-ring-width))
+  );
+  opacity: 0;
+  transition: opacity 120ms linear;
+}
+
+.marker-dot:hover .marker-dot__ring,
+.marker-dot[data-panel='shown'] .marker-dot__ring {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .marker-dot,
+  .marker-dot__ring {
+    transition-duration: 1ms !important;
+  }
+}

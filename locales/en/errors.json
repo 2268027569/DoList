@@ -1,0 +1,5 @@
+{
+  "unknown": "Something went wrong.",
+  "db.title": "Database could not be opened",
+  "db.message": "YiChen ToDo keeps its data in a local SQLite file: {path}. The app cannot start without it."
+}

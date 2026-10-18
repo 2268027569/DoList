@@ -1,0 +1,6 @@
+{
+  "inbox.title": "Inbox",
+  "inbox.empty": "Nothing here yet. Press Ctrl+Shift+N to add a task.",
+  "quickAdd.placeholder": "Add a task and press Enter",
+  "summary.pending": "{count, plural, =0 {Nothing left for today} one {# task left today} other {# tasks left today}}"
+}

@@ -1,0 +1,6 @@
+{
+  "inbox.title": "收件箱",
+  "inbox.empty": "这里还是空的。按 Ctrl+Shift+N 添加一项任务。",
+  "quickAdd.placeholder": "输入任务后按回车",
+  "summary.pending": "{count, plural, =0 {今天没有待办} other {今天还有 # 项待办}}"
+}

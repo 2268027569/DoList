@@ -1,0 +1,29 @@
+/*
+ * Panel stylesheet: Tailwind plus the base layer. Tailwind comes first so the
+ * base reset wins where the two overlap.
+ */
+@import 'tailwindcss';
+@import './base.css';
+
+/*
+ * Expand / collapse primitive. Only opacity and transform animate, so the
+ * compositor does the work and the main process never animates window bounds
+ * (docs/ARCHITECTURE.md §7, §9.1).
+ */
+.panel-card {
+  opacity: 0;
+  transform: scale(0.96);
+  transition-property: opacity, transform;
+  transition-timing-function: var(--ease-emphasized);
+}
+
+.panel-card[data-phase='open'] {
+  opacity: 1;
+  transform: scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-card {
+    transition-duration: 1ms !important;
+  }
+}

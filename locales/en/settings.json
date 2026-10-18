@@ -1,0 +1,15 @@
+{
+  "title": "Settings",
+  "language.label": "Language",
+  "theme.label": "Theme",
+  "theme.minimal": "Minimal white",
+  "theme.graphite": "Graphite",
+  "mode.label": "Mode",
+  "mode.light": "Light",
+  "mode.dark": "Dark",
+  "mode.system": "System",
+  "alwaysOnTop.label": "Keep panel on top",
+  "alwaysOnTop.on": "On",
+  "alwaysOnTop.off": "Off",
+  "about.version": "v{version}"
+}

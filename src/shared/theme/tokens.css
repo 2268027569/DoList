@@ -1,0 +1,170 @@
+/*
+ * Three-layer theme tokens (docs/ARCHITECTURE.md §7).
+ *
+ *   layer 1  raw palette          --palette-*
+ *   layer 2  semantic tokens      --bg-*, --text-*, --border-*, --accent, --status-*
+ *   layer 3  component tokens     --panel-*, --marker-*
+ *
+ * Components consume semantic/component tokens ONLY. Hex colors are allowed in
+ * this file exclusively; `scripts/check-tokens.mjs` fails the build when a raw
+ * color shows up anywhere else under src/renderer.
+ *
+ * Switching a theme is nothing but swapping variable values: `data-theme` on
+ * <html> selects the theme, `data-mode` selects light/dark.
+ */
+
+/* ------------------------------------------------------------------ layer 1 */
+
+:root {
+  --palette-green-500: #12e68a;
+  --palette-green-600: #0fdc78;
+  --palette-green-700: #0bbd66;
+  --palette-blue-500: #2f7bf6;
+  --palette-amber-500: #f5a524;
+  --palette-red-500: #d93025;
+  --palette-red-400: #ff6b61;
+
+  --palette-white: #ffffff;
+  --palette-black: #000000;
+  --palette-neutral-50: #f5f6f7;
+  --palette-neutral-100: #edeff2;
+  --palette-neutral-200: #e4e6eb;
+  --palette-neutral-400: #8a8f98;
+  --palette-neutral-600: #52525b;
+  --palette-neutral-700: #3f4249;
+  --palette-neutral-800: #2c2e34;
+  --palette-neutral-850: #1e1f23;
+  --palette-neutral-900: #171717;
+  --palette-neutral-950: #121316;
+  --palette-neutral-1000: #0b1f16;
+}
+
+/* ------------------------------------------------------- layer 2 · minimal */
+
+:root[data-theme='minimal'][data-mode='light'] {
+  --bg-base: var(--palette-neutral-50);
+  --bg-surface: #ffffff;
+  --bg-surface-muted: var(--palette-neutral-100);
+
+  --text-primary: #171717;
+  --text-secondary: var(--palette-neutral-600);
+  --text-muted: var(--palette-neutral-400);
+  --text-inverse: #ffffff;
+
+  --border-default: var(--palette-neutral-200);
+  --border-strong: var(--palette-neutral-400);
+
+  --accent: var(--palette-green-600);
+  --accent-soft: rgba(15, 220, 120, 0.14);
+  --accent-on: var(--palette-neutral-1000);
+  --accent-text: var(--palette-green-700);
+
+  --status-overdue: var(--palette-red-500);
+  --status-done: var(--palette-green-600);
+  --status-warning: var(--palette-amber-500);
+  --priority-high: var(--palette-red-500);
+  --priority-medium: var(--palette-amber-500);
+  --priority-low: var(--palette-blue-500);
+}
+
+:root[data-theme='minimal'][data-mode='dark'] {
+  --bg-base: var(--palette-neutral-950);
+  --bg-surface: #1e1f23;
+  --bg-surface-muted: #26282d;
+
+  --text-primary: #f4f5f7;
+  --text-secondary: #b4b8c0;
+  --text-muted: #7c828c;
+  --text-inverse: var(--palette-neutral-1000);
+
+  --border-default: var(--palette-neutral-800);
+  --border-strong: var(--palette-neutral-700);
+
+  --accent: var(--palette-green-500);
+  --accent-soft: rgba(18, 230, 138, 0.18);
+  --accent-on: var(--palette-neutral-1000);
+  --accent-text: var(--palette-green-500);
+
+  --status-overdue: var(--palette-red-400);
+  --status-done: var(--palette-green-500);
+  --status-warning: var(--palette-amber-500);
+  --priority-high: var(--palette-red-400);
+  --priority-medium: var(--palette-amber-500);
+  --priority-low: var(--palette-blue-500);
+}
+
+/* ------------------------------------------------------ layer 2 · graphite */
+
+:root[data-theme='graphite'][data-mode='light'] {
+  --bg-base: #ecedee;
+  --bg-surface: #f7f8f9;
+  --bg-surface-muted: var(--palette-neutral-200);
+
+  --text-primary: #1a1b1e;
+  --text-secondary: #4a4e55;
+  --text-muted: #868b93;
+  --text-inverse: #ffffff;
+
+  --border-default: #d5d8dd;
+  --border-strong: #a9afb8;
+
+  --accent: var(--palette-green-600);
+  --accent-soft: rgba(15, 220, 120, 0.14);
+  --accent-on: var(--palette-neutral-1000);
+  --accent-text: var(--palette-green-700);
+
+  --status-overdue: var(--palette-red-500);
+  --status-done: var(--palette-green-600);
+  --status-warning: var(--palette-amber-500);
+  --priority-high: var(--palette-red-500);
+  --priority-medium: var(--palette-amber-500);
+  --priority-low: var(--palette-blue-500);
+}
+
+:root[data-theme='graphite'][data-mode='dark'] {
+  --bg-base: #0e0f11;
+  --bg-surface: #17181b;
+  --bg-surface-muted: #202226;
+
+  --text-primary: #f2f3f5;
+  --text-secondary: #a9adb5;
+  --text-muted: #71767e;
+  --text-inverse: var(--palette-neutral-1000);
+
+  --border-default: #2a2c30;
+  --border-strong: var(--palette-neutral-700);
+
+  --accent: var(--palette-green-500);
+  --accent-soft: rgba(18, 230, 138, 0.18);
+  --accent-on: var(--palette-neutral-1000);
+  --accent-text: var(--palette-green-500);
+
+  --status-overdue: var(--palette-red-400);
+  --status-done: var(--palette-green-500);
+  --status-warning: var(--palette-amber-500);
+  --priority-high: var(--palette-red-400);
+  --priority-medium: var(--palette-amber-500);
+  --priority-low: var(--palette-blue-500);
+}
+
+/* --------------------------------------------------------- layer 3 · shared */
+
+:root {
+  --font-sans:
+    'Segoe UI Variable Text', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC',
+    'Noto Sans SC', 'Microsoft YaHei', sans-serif;
+
+  --panel-width: 380px;
+  --panel-max-height: 560px;
+  --panel-padding: 16px;
+  --panel-radius: 14px;
+  --panel-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
+
+  --marker-size: 28px;
+  --marker-ring-width: 3px;
+  --marker-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+
+  --duration-expand: 200ms;
+  --duration-collapse: 160ms;
+  --ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
+}

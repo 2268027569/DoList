@@ -1,0 +1,53 @@
+# Packaging configuration (docs/ARCHITECTURE.md §11).
+#
+# electron-builder discovers this file at the project root; `build/` holds the
+# signing resources it references. `dependencies` (better-sqlite3,
+# electron-updater) are bundled automatically; everything else is dev-only.
+appId: com.yichen.todolist
+productName: YiChen ToDo
+copyright: Copyright (c) 2026 YiChen
+
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - out/**
+  - resources/**
+  - package.json
+
+extraResources:
+  - from: resources
+    to: resources
+
+# better-sqlite3 loads a native binary that cannot run from inside the asar.
+npmRebuild: true
+asarUnpack:
+  - '**/node_modules/better-sqlite3/**'
+
+win:
+  icon: resources/icon.png
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: portable
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  shortcutName: YiChen ToDo
+
+mac:
+  icon: resources/icon.png
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]

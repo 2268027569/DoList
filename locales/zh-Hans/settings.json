@@ -1,0 +1,15 @@
+{
+  "title": "设置",
+  "language.label": "语言",
+  "theme.label": "主题",
+  "theme.minimal": "极简白",
+  "theme.graphite": "石墨黑",
+  "mode.label": "外观模式",
+  "mode.light": "浅色",
+  "mode.dark": "深色",
+  "mode.system": "跟随系统",
+  "alwaysOnTop.label": "面板保持置顶",
+  "alwaysOnTop.on": "开",
+  "alwaysOnTop.off": "关",
+  "about.version": "v{version}"
+}
