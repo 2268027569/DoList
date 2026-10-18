@@ -1,67 +1,122 @@
 /*
  * Marker stylesheet. Hand-written and tiny on purpose: this window is always
  * resident, so it must not carry the panel's utility framework (§2).
+ *
+ * Every size comes from custom properties the entry writes (`--marker-w`,
+ * `--marker-h`, `--marker-opacity`, `--marker-progress`), and every colour from
+ * tokens selected by `data-*` attributes (§7) — no raw numbers or colours here.
  */
 @import '../../shared-ui/base.css';
 
-.marker-dot {
+/* The window is sized by the main process; the artwork is centred inside it. */
+.marker {
   display: grid;
   place-items: center;
   width: 100%;
   height: 100%;
-  border-radius: 999px;
   cursor: pointer;
-  transition: transform 120ms var(--ease-emphasized);
 }
 
-.marker-dot:hover {
-  transform: scale(1.08);
-}
-
-.marker-dot__core,
-.marker-dot__ring {
+.marker__core,
+.marker__ring {
   grid-area: 1 / 1;
   border-radius: 999px;
 }
 
-.marker-dot__core {
-  width: calc(var(--marker-size) - 8px);
-  height: calc(var(--marker-size) - 8px);
-  background: var(--accent);
+.marker__core {
+  display: grid;
+  place-items: center;
+  width: calc(var(--marker-w, 28px) - 8px);
+  height: calc(var(--marker-h, 28px) - 8px);
+  background: var(--marker-tint);
   box-shadow: var(--marker-shadow);
+  opacity: var(--marker-opacity, 1);
+  transition:
+    transform 120ms var(--ease-emphasized),
+    opacity 120ms linear;
 }
 
-/* Hover ring: a conic track that M01 fills with today's completion ratio. */
-.marker-dot__ring {
-  width: var(--marker-size);
-  height: var(--marker-size);
+.marker[data-shape='icon'] .marker__core {
+  border-radius: 30%;
+}
+
+.marker__count {
+  font: 600 11px/1 var(--font-sans);
+  font-variant-numeric: tabular-nums;
+  color: var(--marker-on-tint);
+  opacity: 0;
+}
+
+.marker[data-shape='icon'] .marker__count {
+  font-size: 13px;
+}
+
+.marker[data-badge='on'] .marker__count {
+  opacity: 1;
+}
+
+/* Progress ring: a conic track around a round core (dot and icon shapes). */
+.marker__ring {
+  width: var(--marker-w, 28px);
+  height: var(--marker-w, 28px);
   background: conic-gradient(
-    var(--accent) calc(var(--marker-progress, 0) * 1%),
-    var(--accent-soft) calc(var(--marker-progress, 0) * 1%)
+    var(--marker-ring) calc(var(--marker-progress, 0) * 1%),
+    var(--marker-ring-track) 0
   );
-  /* The mask below is an alpha channel, not a palette colour. */
+  /* The masks below are alpha channels, not palette colours. */
   -webkit-mask: radial-gradient(
     farthest-side,
     transparent calc(100% - var(--marker-ring-width)),
-    black calc(100% - var(--marker-ring-width))
+    black 0
   );
   mask: radial-gradient(
     farthest-side,
     transparent calc(100% - var(--marker-ring-width)),
-    black calc(100% - var(--marker-ring-width))
+    black 0
   );
   opacity: 0;
   transition: opacity 120ms linear;
 }
 
-.marker-dot:hover .marker-dot__ring,
-.marker-dot[data-panel='shown'] .marker-dot__ring {
+.marker[data-ring='on'] .marker__ring {
+  opacity: 1;
+}
+
+/* A capsule cannot carry a circular ring; its progress is a fill instead. */
+.marker[data-shape='pill'] .marker__ring {
+  display: none;
+}
+
+.marker[data-shape='pill'][data-ring='on'] .marker__core {
+  background: linear-gradient(
+    to right,
+    var(--marker-ring) calc(var(--marker-progress, 0) * 1%),
+    var(--marker-tint) 0
+  );
+}
+
+:root[dir='rtl'] .marker[data-shape='pill'][data-ring='on'] .marker__core {
+  background: linear-gradient(
+    to left,
+    var(--marker-ring) calc(var(--marker-progress, 0) * 1%),
+    var(--marker-tint) 0
+  );
+}
+
+/* RTL sweeps the ring the other way (§8). */
+:root[dir='rtl'] .marker__ring {
+  transform: scaleX(-1);
+}
+
+.marker:hover .marker__core,
+.marker[data-panel='shown'] .marker__core {
+  transform: scale(1.08);
   opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .marker-dot,
-  .marker-dot__ring {
+  .marker__core,
+  .marker__ring {
     transition-duration: 1ms !important;
   }
 }

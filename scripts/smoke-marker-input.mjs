@@ -393,6 +393,34 @@ async function main() {
       );
     }
 
+    // --- phase 0: marker state ----------------------------------------------
+    // The main process owns the appearance + badge + ring and pushes them to the
+    // marker entry (§9). Both halves are asserted: that the push happened, and
+    // that the always-resident renderer actually applied it.
+    const pushed = await waitForEvent('marker-state', 10_000, ready.at - 2_000);
+    if (pushed === null) {
+      fail('the main process never pushed the marker state');
+    } else {
+      pass('the main process pushed the marker appearance / badge / ring state');
+    }
+
+    const applied = await waitForEvent('marker-state-applied', 10_000, ready.at - 2_000);
+    if (applied === null) {
+      fail('the marker renderer never applied the pushed state');
+    } else {
+      const detail = applied.detail ?? {};
+      const expected = { shape: 'dot', badge: 3, progress: 42, risk: 'near' };
+      const matches = Object.entries(expected).every(([key, value]) => detail[key] === value);
+      if (matches) {
+        pass('marker applied the pushed shape, badge and progress ring', detail);
+      } else {
+        fail(
+          `marker applied ${JSON.stringify(detail)}, expected the harness state ` +
+            `${JSON.stringify(expected)}`,
+        );
+      }
+    }
+
     // --- phase 1: drag ------------------------------------------------------
     const drag = await runDrag(initial, display);
 

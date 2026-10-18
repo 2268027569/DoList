@@ -2,7 +2,11 @@ import { contextBridge, ipcRenderer } from 'electron';
 import type { IpcRendererEvent } from 'electron';
 
 import { IPC } from '@shared/contracts/channels';
-import type { MarkerAnchorPayload, PanelStatePayload } from '@shared/contracts/channels';
+import type {
+  MarkerAnchorPayload,
+  MarkerStatePayload,
+  PanelStatePayload,
+} from '@shared/contracts/channels';
 import type { AppSettings } from '@shared/contracts/settings';
 import type { BootParams, MarkerAnchor } from '@shared/types/app';
 import type { IpcResult } from '@shared/types/ipc';
@@ -53,6 +57,8 @@ const api = {
       subscribe(IPC.event.localeChanged, listener),
     markerAnchorChanged: (listener: (payload: MarkerAnchorPayload) => void) =>
       subscribe(IPC.event.markerAnchorChanged, listener),
+    markerState: (listener: (payload: MarkerStatePayload) => void) =>
+      subscribe(IPC.event.markerState, listener),
   },
 } as const;
 

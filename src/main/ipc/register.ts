@@ -14,7 +14,9 @@ import {
   SETTINGS_KEY,
   appSettingsPatchSchema,
   appSettingsSchema,
+  markerAppearanceOf,
 } from '@shared/contracts/settings';
+import type { AppSettings } from '@shared/contracts/settings';
 import { createLogger } from '../logger';
 import { initI18n } from '../i18n';
 import { readRawSetting } from '../db/repositories/settings';
@@ -24,6 +26,7 @@ import { appSettings, updateAppSettings, writeMarkerAnchor } from '../services/s
 import { broadcastLocale, broadcastTheme } from '../services/broadcast';
 import {
   applyMarkerAnchor,
+  applyMarkerAppearance,
   endMarkerDrag,
   noteDragSignal,
   startMarkerDrag,
@@ -107,6 +110,11 @@ export function registerIpcHandlers(): void {
     if (updated.themeMode !== previous.themeMode || updated.themeId !== previous.themeId) {
       broadcastTheme();
     }
+    // Appearance changes resize the marker window, so they cannot wait for the
+    // next boot (§9.1); the push also carries the badge and ring.
+    if (markerAppearanceChanged(previous, updated)) {
+      applyMarkerAppearance(markerAppearanceOf(updated));
+    }
     return ok(appSettingsSchema.parse(updated));
   });
 
@@ -152,6 +160,10 @@ function readSettingKey(payload: unknown): string | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const key = (payload as { key?: unknown }).key;
   return typeof key === 'string' && key.length > 0 ? key : null;
+}
+
+function markerAppearanceChanged(before: AppSettings, after: AppSettings): boolean {
+  return JSON.stringify(markerAppearanceOf(before)) !== JSON.stringify(markerAppearanceOf(after));
 }
 
 function invalid(channel: string, details: unknown): IpcResult<never> {

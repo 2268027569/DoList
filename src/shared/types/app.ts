@@ -11,6 +11,28 @@ export type LocaleId = 'en' | 'zh-Hans';
 /** Shape of the marker when idle (docs/FEATURES.md M01). */
 export type MarkerShape = 'dot' | 'pill' | 'icon';
 
+/** Marker colour, resolved to a semantic token by the renderer (§7). */
+export type MarkerTint = 'accent' | 'info' | 'warning' | 'overdue' | 'neutral';
+
+/** Which count the marker advertises. `none` hides the number. */
+export type MarkerBadgeMode = 'none' | 'open' | 'today' | 'overdue';
+
+/** How alarming the ring should look (docs/FEATURES.md M01). */
+export type MarkerRisk = 'neutral' | 'near' | 'overdue';
+
+/** Everything the marker renderer needs to draw the button (§9). */
+export interface MarkerAppearance {
+  shape: MarkerShape;
+  /** Artwork scale, 0.8–1.5. */
+  scale: number;
+  /** Idle opacity, 0.4–1; hover always restores full opacity. */
+  opacity: number;
+  tint: MarkerTint;
+  badgeMode: MarkerBadgeMode;
+  /** Show today's completion on the marker. */
+  showRing: boolean;
+}
+
 /** Which work-area edge the marker is anchored to. `free` = snapped to no edge. */
 export type MarkerEdge = 'left' | 'right' | 'top' | 'bottom' | 'free';
 
@@ -38,6 +60,11 @@ export interface BootParams {
   mode: ThemeMode;
   theme: ThemeId;
   locale: string;
+  /**
+   * Marker-only: applied before the first paint so the window never flashes a
+   * different shape / scale than the one it was sized for (§9.5).
+   */
+  marker?: MarkerAppearance;
   /** Only set by the marker-input smoke harness; the preload exposes extra hooks when true. */
   smoke?: boolean;
 }

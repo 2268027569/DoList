@@ -1,4 +1,10 @@
-import type { MarkerAnchor, MarkerEdge, PanelState } from '../types/app';
+import type {
+  MarkerAnchor,
+  MarkerAppearance,
+  MarkerEdge,
+  MarkerRisk,
+  PanelState,
+} from '../types/app';
 
 /** Channel names follow `<domain>:<action>`; events use the `event:` prefix (§6.1). */
 export const IPC = {
@@ -45,6 +51,8 @@ export const IPC = {
     themeChanged: 'event:theme-changed',
     localeChanged: 'event:locale-changed',
     markerAnchorChanged: 'event:marker-anchor-changed',
+    /** Main -> marker: appearance plus the counts the badge / ring should show. */
+    markerState: 'event:marker-state',
   },
 } as const;
 
@@ -57,4 +65,18 @@ export interface PanelStatePayload {
 export interface MarkerAnchorPayload {
   anchor: MarkerAnchor;
   edge: MarkerEdge;
+}
+
+/**
+ * The marker's complete visual input. Appearance is settings driven and state is
+ * data driven; both travel together because the main process recomputes the pair
+ * on every settings or task change and the renderer applies it in one pass.
+ */
+export interface MarkerStatePayload {
+  appearance: MarkerAppearance;
+  /** Number for the badge; `0` hides it. */
+  badge: number;
+  /** Today's completion, 0–100; `null` hides the ring. */
+  progress: number | null;
+  risk: MarkerRisk;
 }

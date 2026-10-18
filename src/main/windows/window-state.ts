@@ -1,21 +1,20 @@
 import { screen } from 'electron';
-import type { BrowserWindow, Display, Rectangle } from 'electron';
+import type { Display, Rectangle } from 'electron';
 
 import { fromAnchor, snapToWorkArea, toAnchor } from '@shared/utils/anchoring';
-import type { MarkerAnchor } from '@shared/types/app';
+import { markerWindowSize as artworkWindowSize } from '@shared/utils/marker-geometry';
+import type { Size } from '@shared/utils/marker-geometry';
+import type { MarkerAnchor, MarkerAppearance } from '@shared/types/app';
 
 /**
- * Design size of the marker artwork: a 28px dot with a hover ring (§9.1).
+ * Platform floor for a transparent, frameless top-level window, in DIPs.
  *
- * The *window* may be larger: Windows refuses to create a transparent frameless
- * window smaller than 32×39 (measured — see §9.1), so the OS silently inflates
- * the request. `markerWindowSize()` reads the size the platform actually gave us
- * and every anchoring calculation uses that, keeping the geometry honest.
+ * Windows refuses to create one smaller than 32×39 and silently inflates the
+ * request (measured — see §9.1.1), so the marker *window* is the larger of the
+ * artwork and this floor, and the artwork stays centred inside it. Every
+ * anchoring calculation uses the window size, keeping the geometry honest.
  */
-export const MARKER_ARTWORK_SIZE = 28;
-
-/** Platform floor for a transparent, frameless top-level window, in DIPs. */
-export const MARKER_WINDOW_FLOOR: Record<string, { width: number; height: number }> = {
+export const MARKER_WINDOW_FLOOR: Record<string, Size> = {
   win32: { width: 32, height: 39 },
 };
 
@@ -29,14 +28,13 @@ export const DEFAULT_MARKER_ANCHOR: MarkerAnchor = {
   ratioAlongEdge: 0.7,
 };
 
-export function markerWindowSize(window?: BrowserWindow | null): { width: number; height: number } {
-  if (window && !window.isDestroyed()) {
-    const bounds = window.getBounds();
-    return { width: bounds.width, height: bounds.height };
-  }
-  const floor = MARKER_WINDOW_FLOOR[process.platform];
-  if (floor) return { ...floor };
-  return { width: MARKER_ARTWORK_SIZE, height: MARKER_ARTWORK_SIZE };
+/** Window size for the given appearance, i.e. artwork clamped up to the floor. */
+export function markerWindowSize(appearance: MarkerAppearance): Size {
+  return artworkWindowSize(
+    appearance.shape,
+    appearance.scale,
+    MARKER_WINDOW_FLOOR[process.platform] ?? null,
+  );
 }
 
 /**
@@ -55,10 +53,7 @@ export function displayForAnchor(anchor: MarkerAnchor): Display {
 }
 
 /** Absolute marker rectangle for an anchor, kept inside the resolved work area. */
-export function resolveMarkerBounds(
-  anchor: MarkerAnchor,
-  size: { width: number; height: number } = markerWindowSize(),
-): Rectangle {
+export function resolveMarkerBounds(anchor: MarkerAnchor, size: Size): Rectangle {
   const display = displayForAnchor(anchor);
   const position = fromAnchor(anchor, display.workArea, size);
   const snapped = snapToWorkArea(

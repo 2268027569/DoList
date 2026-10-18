@@ -2,11 +2,15 @@ import { BrowserWindow, screen } from 'electron';
 import { join } from 'node:path';
 
 import { IPC } from '@shared/contracts/channels';
+import type { MarkerStatePayload } from '@shared/contracts/channels';
+import { markerAppearanceOf } from '@shared/contracts/settings';
 import { TRANSPARENT_WINDOW_BACKGROUND } from '@shared/theme/window-background';
-import type { BootParams, MarkerAnchor, Rect } from '@shared/types/app';
+import type { BootParams, MarkerAnchor, MarkerAppearance, Rect } from '@shared/types/app';
+import { DEFAULT_APPEARANCE } from '@shared/utils/marker-geometry';
 import { createLogger } from '../logger';
 import { isSmokeEnabled, smokeReady, smokeRecord } from '../platform/smoke';
-import { readMarkerAnchor, writeMarkerAnchor } from '../services/settings';
+import { currentMarkerState, SMOKE_MARKER_STATE } from '../services/marker-state';
+import { appSettings, readMarkerAnchor, writeMarkerAnchor } from '../services/settings';
 import { loadRenderer } from './load-renderer';
 import {
   DEFAULT_MARKER_ANCHOR,
@@ -38,19 +42,22 @@ interface DragState {
 let markerWindow: BrowserWindow | null = null;
 let drag: DragState | null = null;
 let currentAnchor: MarkerAnchor = DEFAULT_MARKER_ANCHOR;
+let currentAppearance: MarkerAppearance = DEFAULT_APPEARANCE;
 
 export function getMarkerWindow(): BrowserWindow | null {
   return markerWindow;
 }
 
 export function createMarkerWindow(boot: BootParams): BrowserWindow {
-  // The smoke harness always starts from the default anchor: it drives the same
-  // cursor delta every run, and a persisted position would drift the marker off
-  // the work area on the second run, making the geometry assertion meaningless.
-  currentAnchor = isSmokeEnabled()
-    ? DEFAULT_MARKER_ANCHOR
-    : (readMarkerAnchor() ?? DEFAULT_MARKER_ANCHOR);
-  const size = markerWindowSize();
+  // The smoke harness always starts from the default anchor and appearance: it
+  // drives the same cursor delta every run, and a persisted position or shape
+  // would drift the marker off the work area / off the asserted geometry, making
+  // the assertion meaningless on the second run.
+  const smoke = isSmokeEnabled();
+  currentAnchor = smoke ? DEFAULT_MARKER_ANCHOR : (readMarkerAnchor() ?? DEFAULT_MARKER_ANCHOR);
+  currentAppearance = smoke ? DEFAULT_APPEARANCE : markerAppearanceOf(appSettings());
+
+  const size = markerWindowSize(currentAppearance);
   const bounds = resolveMarkerBounds(currentAnchor, size);
 
   // The smoke harness can flip focusability to answer "does the marker still get
@@ -113,25 +120,60 @@ export function createMarkerWindow(boot: BootParams): BrowserWindow {
 
   window.once('ready-to-show', () => {
     window.showInactive();
-    log('marker shown', { anchor: currentAnchor, bounds: window.getBounds() });
+    log('marker shown', {
+      anchor: currentAnchor,
+      appearance: currentAppearance,
+      bounds: window.getBounds(),
+    });
     smokeReady({ markerBounds: window.getBounds(), markerAnchor: currentAnchor });
   });
+
+  // The first state push waits for the document: sending before the marker
+  // subscribes would drop the appearance and the window would flash its CSS
+  // defaults. `dom-ready` fires after the entry has run its first pass.
+  window.webContents.once('dom-ready', () => pushMarkerState());
 
   window.on('closed', () => {
     markerWindow = null;
   });
 
   markerWindow = window;
-  void loadRenderer(window, 'marker', boot);
+  void loadRenderer(window, 'marker', { ...boot, marker: currentAppearance });
   watchDisplayChanges();
   return window;
+}
+
+/**
+ * Applies a settings-driven appearance: resize the window to the new artwork and
+ * tell the renderer to redraw. Called from the settings handler, so a shape or
+ * scale change takes effect without a restart.
+ */
+export function applyMarkerAppearance(appearance: MarkerAppearance): void {
+  currentAppearance = appearance;
+  if (markerWindow && !markerWindow.isDestroyed()) {
+    const size = markerWindowSize(appearance);
+    markerWindow.setBounds(resolveMarkerBounds(currentAnchor, size));
+    log('marker appearance applied', { appearance, size });
+  }
+  pushMarkerState();
+}
+
+/** Recomputes and sends the badge / ring / appearance to the marker renderer. */
+export function pushMarkerState(state: MarkerStatePayload = resolveMarkerState()): void {
+  if (markerWindow === null || markerWindow.isDestroyed()) return;
+  markerWindow.webContents.send(IPC.event.markerState, state);
+  smokeRecord('marker-state', { state });
+}
+
+function resolveMarkerState(): MarkerStatePayload {
+  return isSmokeEnabled() ? SMOKE_MARKER_STATE : currentMarkerState();
 }
 
 /** Re-applies an anchor stored from the renderer (`marker:set-anchor`). */
 export function applyMarkerAnchor(anchor: MarkerAnchor): void {
   currentAnchor = anchor;
   if (!markerWindow || markerWindow.isDestroyed()) return;
-  markerWindow.setBounds(resolveMarkerBounds(anchor));
+  markerWindow.setBounds(resolveMarkerBounds(anchor, markerWindowSize(currentAppearance)));
 }
 
 /**
@@ -186,7 +228,7 @@ export function endMarkerDrag(): MarkerAnchor | null {
   const rawBounds = window.getBounds();
   const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
   const anchor = anchorForBounds(rawBounds, display);
-  window.setBounds(resolveMarkerBounds(anchor));
+  window.setBounds(resolveMarkerBounds(anchor, markerWindowSize(currentAppearance)));
   currentAnchor = anchor;
   writeMarkerAnchor(anchor);
 
@@ -245,7 +287,7 @@ function watchDisplayChanges(): void {
     const anchor = anchorForBounds(bounds, display);
     currentAnchor = anchor;
     writeMarkerAnchor(anchor);
-    markerWindow.setBounds(resolveMarkerBounds(anchor));
+    markerWindow.setBounds(resolveMarkerBounds(anchor, markerWindowSize(currentAppearance)));
     log(`display change (${reason}) re-homed the marker`, { anchor });
     markerWindow.webContents.send(IPC.event.markerAnchorChanged, { anchor, edge: anchor.edge });
   };

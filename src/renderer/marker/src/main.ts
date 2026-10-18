@@ -1,4 +1,6 @@
 import './marker.css';
+import { DEFAULT_APPEARANCE, markerArtworkSize } from '@shared/utils/marker-geometry';
+import type { MarkerStatePayload } from '@shared/contracts/channels';
 import { applyBootParams, readBoot, smokeEnabled } from '../../shared-ui/boot';
 import { attachDragBridge, clickIsSuppressed } from '../../shared-ui/drag';
 import { report } from '../../shared-ui/smoke';
@@ -16,12 +18,23 @@ function main(): void {
 
   const element = document.getElementById('marker');
   if (element === null) return;
+  const counter = element.querySelector('.marker__count');
 
   const smoke = smokeEnabled(boot);
   const bridge = attachDragBridge(element);
 
   let locale = boot.locale;
-  setLabel(element, locale);
+  let badge = 0;
+  setLabel(element, locale, badge);
+
+  // The first paint uses the boot appearance so the marker never flashes a shape
+  // the window was not sized for; the pushed state then keeps it current (§9.5).
+  applyState(element, counter, {
+    appearance: boot.marker ?? DEFAULT_APPEARANCE,
+    badge,
+    progress: null,
+    risk: 'neutral',
+  });
   report(smoke, 'ready', { boot });
 
   let lastExpandAt = 0;
@@ -59,6 +72,18 @@ function main(): void {
     event.preventDefault();
   });
 
+  window.api.on.markerState((state) => {
+    badge = state.badge;
+    applyState(element, counter, state);
+    setLabel(element, locale, badge);
+    report(smoke, 'marker-state-applied', {
+      shape: state.appearance.shape,
+      badge: state.badge,
+      progress: state.progress,
+      risk: state.risk,
+    });
+  });
+
   window.api.on.panelState(({ state }) => {
     element.dataset['panel'] = state;
   });
@@ -69,12 +94,35 @@ function main(): void {
 
   window.api.on.localeChanged((params) => {
     locale = params.locale;
-    setLabel(element, locale);
+    setLabel(element, locale, badge);
   });
 }
 
-function setLabel(element: HTMLElement, locale: string): void {
+/** Writes an appearance + counts pair onto the DOM and the token scope. */
+function applyState(
+  element: HTMLElement,
+  counter: Element | null,
+  state: MarkerStatePayload,
+): void {
+  const { appearance, badge, progress, risk } = state;
+  const root = document.documentElement;
+  root.dataset['markerTint'] = appearance.tint;
+  root.dataset['markerRisk'] = risk;
+
+  const artwork = markerArtworkSize(appearance.shape, appearance.scale);
+  element.dataset['shape'] = appearance.shape;
+  element.dataset['badge'] = badge > 0 ? 'on' : 'off';
+  element.dataset['ring'] = appearance.showRing && progress !== null ? 'on' : 'off';
+  element.style.setProperty('--marker-w', `${artwork.width}px`);
+  element.style.setProperty('--marker-h', `${artwork.height}px`);
+  element.style.setProperty('--marker-opacity', String(appearance.opacity));
+  element.style.setProperty('--marker-progress', String(progress ?? 0));
+
+  if (counter !== null) counter.textContent = badge > 0 ? String(badge) : '';
+}
+
+function setLabel(element: HTMLElement, locale: string, badge: number): void {
   const label = markerLabel(locale, 'marker.tooltip');
-  element.setAttribute('aria-label', label);
+  element.setAttribute('aria-label', badge > 0 ? `${label} · ${badge}` : label);
   element.title = label;
 }

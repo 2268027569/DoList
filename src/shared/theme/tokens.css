@@ -160,11 +160,62 @@
   --panel-radius: 14px;
   --panel-shadow: 0 18px 48px rgba(0, 0, 0, 0.22);
 
-  --marker-size: 28px;
   --marker-ring-width: 3px;
   --marker-shadow: 0 2px 10px rgba(0, 0, 0, 0.28);
+  --marker-ring-track: var(--border-default);
 
   --duration-expand: 200ms;
   --duration-collapse: 160ms;
   --ease-emphasized: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* --------------------------------------------- layer 3 · marker variants */
+
+/*
+ * Marker colour and risk are chosen by data attributes on <html>, set by the
+ * marker entry from the pushed state. Keeping the mapping here means the renderer
+ * never names a colour, it only names a variant (§7).
+ */
+:root {
+  --marker-tint: var(--accent);
+  --marker-on-tint: var(--accent-on);
+  --marker-ring: var(--accent);
+}
+
+:root[data-marker-tint='info'] {
+  --marker-tint: var(--priority-low);
+  --marker-on-tint: var(--palette-white);
+  --marker-ring: var(--priority-low);
+}
+
+:root[data-marker-tint='warning'] {
+  --marker-tint: var(--priority-medium);
+  --marker-on-tint: var(--palette-neutral-1000);
+  --marker-ring: var(--priority-medium);
+}
+
+:root[data-marker-tint='overdue'] {
+  --marker-tint: var(--status-overdue);
+  --marker-on-tint: var(--palette-white);
+  --marker-ring: var(--status-overdue);
+}
+
+:root[data-marker-tint='neutral'] {
+  --marker-tint: var(--text-secondary);
+  --marker-on-tint: var(--text-inverse);
+  --marker-ring: var(--text-secondary);
+}
+
+/* Ambers and the lighter dark-mode reds read better with dark text on them. */
+:root[data-theme][data-mode='dark'][data-marker-tint='overdue'] {
+  --marker-on-tint: var(--palette-neutral-1000);
+}
+
+/* Risk overrides the ring colour, whatever the tint is (§FEATURES M01). */
+:root[data-marker-risk='near'] {
+  --marker-ring: var(--status-warning);
+}
+
+:root[data-marker-risk='overdue'] {
+  --marker-ring: var(--status-overdue);
 }

@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
+import type { MarkerAppearance } from '../types/app';
 import { DEFAULT_BOOT, bootQuery, parseBootParams } from './boot';
+
+const APPEARANCE: MarkerAppearance = {
+  shape: 'pill',
+  scale: 1.25,
+  opacity: 0.6,
+  tint: 'warning',
+  badgeMode: 'today',
+  showRing: false,
+};
 
 describe('parseBootParams', () => {
   it('reads mode, theme and locale from the query string', () => {
@@ -22,6 +32,18 @@ describe('parseBootParams', () => {
   it('accepts script subtags', () => {
     expect(parseBootParams('?locale=zh-Hant').locale).toBe('zh-Hant');
   });
+
+  it('decodes the marker appearance when the token is well formed', () => {
+    expect(parseBootParams('?marker=pill,1.25,0.6,warning,today,0').marker).toEqual(APPEARANCE);
+  });
+
+  it('ignores a malformed marker token, and clamps out-of-range numbers', () => {
+    expect(parseBootParams('?marker=blob,1,1,accent,open,1').marker).toBeUndefined();
+    expect(parseBootParams('?marker=dot,9,0,accent,open,1').marker).toMatchObject({
+      scale: 1.5,
+      opacity: 0.4,
+    });
+  });
 });
 
 describe('bootQuery', () => {
@@ -29,5 +51,15 @@ describe('bootQuery', () => {
     const params = { mode: 'light', theme: 'minimal', locale: 'ja' } as const;
     const query = new URLSearchParams(bootQuery(params)).toString();
     expect(parseBootParams(`?${query}`)).toEqual(params);
+  });
+
+  it('carries the marker appearance so the first paint matches the window size', () => {
+    const params = { mode: 'dark', theme: 'graphite', locale: 'en', marker: APPEARANCE } as const;
+    const query = new URLSearchParams(bootQuery(params)).toString();
+    expect(parseBootParams(`?${query}`)).toEqual(params);
+  });
+
+  it('omits the marker token for the panel entry', () => {
+    expect(bootQuery(DEFAULT_BOOT)).not.toHaveProperty('marker');
   });
 });
