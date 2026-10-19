@@ -24,6 +24,7 @@ const DUE_COLOR: Record<DueChipKind, string> = {
 export function TaskRow({ task }: { task: TaskWithTags }): ReactElement {
   const { t, i18n } = useTranslation('tasks');
   const toggleTask = usePanelStore((state) => state.toggleTask);
+  const openTaskDetail = usePanelStore((state) => state.openTaskDetail);
   const done = task.status === 'done';
   const due = dueChip(task.dueAt, task.dueHasTime, i18n.language);
   const priority = PRIORITY[task.priority];
@@ -44,13 +45,24 @@ export function TaskRow({ task }: { task: TaskWithTags }): ReactElement {
       />
 
       <div className="min-w-0 flex-1">
-        <p
-          className={`text-sm break-words ${
+        {/*
+         * The title is the way into the detail view (M02 D6). The button carries
+         * the task's own text as its accessible name, so it announces what it
+         * opens instead of a label that repeats "details" for every row.
+         */}
+        <button
+          type="button"
+          onClick={() => void openTaskDetail(task.id)}
+          // Named for the smoke harness, which reaches this row by keyboard and
+          // has to know which row it landed on before it presses Enter (§13).
+          data-field="task-title"
+          data-task-id={task.id}
+          className={`block w-full text-left text-sm break-words ${
             done ? 'text-[var(--text-muted)] line-through' : 'text-[var(--text-primary)]'
           }`}
         >
           {task.title}
-        </p>
+        </button>
 
         {(due !== null || priority !== undefined || task.tags.length > 0) && (
           <div className="mt-0.5 flex flex-wrap items-center gap-1">

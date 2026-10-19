@@ -7,7 +7,7 @@
 > verified.
 
 - **状态**：已确认（2026-10-19）——D2 用 `rrule` 库、D6 全屏替换式、S7/S8 本轮一并做完
-- **进度**：S0 ✅ 测试地基 → S1 ✅ 数据层 → S2 ✅ IPC → **S3 ✅ 列表与快速新增（2026-10-19）** → 下一片 S4 详情与字段编辑
+- **进度**：S0 ✅ 测试地基 → S1 ✅ 数据层 → S2 ✅ IPC → S3 ✅ 列表与快速新增 → **S4 ✅ 详情与字段编辑（2026-10-19）** → 下一片 S5 排序与拖拽
   - S1 落地：迁移 `0002_task_fields.sql`（加 `remind_lead_min`）、`shared/types/task.ts`、`shared/utils/id.ts`（UUID v7）、`shared/utils/task-query.ts`（过滤 → SQL + 排序白名单）、`repositories/tasks.ts`（增删改查 / 软删级联 / 恢复 / 重排）、`repositories/tags.ts`、`repositories/attachments.ts`；不变量见 ARCHITECTURE §5.1，真库用例 30 例
   - S2 落地：`shared/contracts/task.ts`（zod 契约）、`channels.ts` 的 6 条任务通道 + `event:task-changed`、`main/services/tasks.ts`（域服务，不 import electron）、`main/services/task-events.ts`（`notifyTasksChanged` 单一通知点）、`main/ipc/handlers/task.ts`（按列表注册）、`ipc/validate.ts`（共用 `invalid()`）、preload 白名单 `api.task.*` / `api.on.taskChanged`；契约 20 例 + 服务层真库 15 例
   - S3 落地：`shared/utils/task-due-label.ts`（截止 chip 纯逻辑，9 例单测）、`shared/i18n/format.ts` 补 `formatDayOffset`、`event:quick-add-focus` 通道 + preload 订阅 + 主进程 `expandPanelForQuickAdd()`、全局快捷键 `Ctrl+Shift+N`、面板 `store.ts` 任务分片 + `quick-add.tsx` / `task-row.tsx` / `task-list.tsx`（App.tsx 由 M0 演示壳改为收件箱）、中英双语 `tasks.json` 新键、`scripts/smoke-tasks.mjs`（12 项断言）
@@ -15,6 +15,9 @@
   - S2 的两处收窄：附件通道推到 S7（契约表里本就有）、`event:quick-add-focus` 推到 S3；计划里 S2 的「建 → 事件 → 角标 +1」冒烟断言移到 S3（面板尚无真实列表可输入，且冒烟态角标是桩值）
   - S3 的三处收窄：列表选中集与详情目标（S4 才有人用）、标签 chip 与子任务 `n/m`（S6 的行结构）、拖拽排序（S5）都还没进 `store.ts`；任务行只画「复选圆钮 / 标题 / 截止 chip / 优先级标」，够 S3 的验收，不预埋空壳
   - S3 补回的断言：`smoke-tasks` 覆盖「空库首绘 → 快捷键开面板并把光标交给输入框 → 投递标题 + 回车建任务 → `task-changed`（含主进程实算角标 0→1）→ 面板重取重绘 → 直读 SQLite 校验落库与默认值」，并把第二条任务与「回车后焦点仍在」一并验证
+  - S4 落地：`shared/utils/task-dates.ts`（截止值与存储实例互转、今天/明天、开关时刻；日期非法即拒绝而非进位，8 组 16 例单测）、`task:get` 单行读取通道（契约 + handler + preload）、面板 `store.ts` 详情分片（`openTaskDetail` / `closeTaskDetail` / `refreshOpenTask` / `saveOpenTask` / `deleteOpenTask`）、`task-detail.tsx`（全屏替换列表：标题 / 备注 / 截止含时刻开关与今天·明天·清除 / 提前提醒 / 优先级 / 状态 / 标签增删 / 软删按钮 / `Esc` 返回）、`task-row.tsx` 标题改为进入详情的按钮、App 按 `openTask` 在列表与详情间切换并按 id 加 key、中英 `tasks.json` 新键
+  - S4 的两处设计取舍：详情读的是**单行**而非收件箱分页——在详情里把任务标成已完成会掉出收件箱过滤，用列表那条查询会把正在编辑的屏幕清空；自由文本与日期控件只在**失焦/回车**时提交（每次重取都回写输入框会打断正在输入的内容），开关类控件即时提交
+  - S4 的冒烟改造：原本靠**向面板窗口直投按键**驱动，而这条路走不通——Chromium 把焦点移动当成自己的职责，只在窗口真持有前台时才认，脚本运行从来拿不到前台，于是 Tab 不改变焦点，脚本却仍按固定次数按下去，随后的回车落在还留着焦点的控件上（实测把两条任务标成了完成）。改为冒烟时开一个调试端口（`YICHEN_SMOKE` 才开），脚本通过 DevTools 协议附着面板页面：控件按 `data-field` 名**直接设焦点**、按键直接送进渲染进程，不经过 OS 输入队列、不受输入法影响、也不需要前台；`smoke-tasks` 断言 22 项，含「改截止/优先级 → `Esc` 回列表且 chip 已变 → 重启后直读库仍一致」
 - **范围**：[FEATURES.md](FEATURES.md) 的 M02（**不含**自然语言解析，属 P1 且依赖 M06 的语种词表）
 - **前置**：M01 已完成（标记窗口、拖拽、吸附、贴边隐藏、面板形态、状态推送）
 - **约定**：中文文档；英文提交信息与代码注释；每个切片独立提交、独立验证
@@ -136,7 +139,7 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 |---|---|---|
 | 快速新增 | 单行输入，`Enter` 建任务并保持焦点继续输入；由 `Ctrl+Shift+N` 从任意位置唤起（快捷键文案已在 `tasks.json` 的 `inbox.empty` 里预告） | FEATURES M02 P0 |
 | 列表 | 复选圆钮（完成）/ 标题 / 截止 chip / 优先级标 / 标签 chip；子任务缩进一层，父行显示 `n/m`；空状态用已有 `inbox.empty` | — |
-| 详情 | 全屏替换式（D6）：标题、备注、截止（含「仅日期 / 含时刻」开关）、优先级、状态、标签、所属清单、预估/实际耗时、子任务区、附件区；`Esc` 返回 | — |
+| 详情 | 全屏替换式（D6）：标题、备注、截止（含「仅日期 / 含时刻」开关 + 今天 / 明天 / 清除）、提前提醒分钟、优先级、状态、标签增删、软删按钮；`Esc` 返回。**S4 已交付这些**；所属清单等 M03 有清单可用时补，预估/实际耗时与子任务区、附件区分别等 S7、S6 | — |
 | 排序 | 列表内拖拽（HTML5 `draggable` 优先，见 §9 风险）+ 键盘替代 `Alt+↑/↓`（无鼠标可用，也让自动化可测） | FEATURES M02 P0 |
 | 批量 | 选择模式 + 底部操作条（改优先级 / 改日期 / 加标签 / 移清单 / 完成 / 删除） | P1 |
 | 撤销 | 回收站条样式 toast + `Ctrl+Z` | P1 |
@@ -154,7 +157,7 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 | `shared/utils/sort-order.ts` | 插入到中间 / 追加 / 跨清单的后继顺序计算 |
 | `shared/utils/recurrence.ts` | RRULE 包装 + `nextOccurrence`：每天、工作日、每周、每月（31 号）、每年（2/29）、DST 边界、`after_completion` 模式 |
 | `shared/utils/task-tree.ts` | 一层限制校验、`n/m` 汇总 |
-| `shared/utils/task-dates.ts` | 截止预设（今天 / 明天 / 本周末 / 下周 / 自定义）→ `due_at` + `due_has_time` |
+| `shared/utils/task-dates.ts` | **S4 已实现**：存储实例 ↔ 日期/时刻控件值互转（非法日期拒绝而非进位）、今天/明天 = 本地零点、开关「含时刻」｜**未做**：本周末 / 下周 / 自定义偏移——等 S5 之后的日期选择器有真实落点再补 |
 | `main/services/undo.ts` | 逆操作栈（上限、覆盖的操作集、栈空返回 `ok(null)`） |
 | `shared/contracts/task.ts` | zod 边界：空标题、超长、优先级越界、非法 `dueAt`、两层子任务被拒 |
 
@@ -168,13 +171,13 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 | **S1 数据层** | 迁移 0002 + 任务/标签/附件仓储 + 不变量 | 仓储测试（按 D1 结论）或 Electron 内集成；纯逻辑单测 |
 | **S2 IPC** | `contracts/task.ts`、通道、`handlers/task.ts`、preload 白名单、`notifyTasksChanged` | schema 单测；冒烟断言「建 → 事件 → 标记角标 +1」 |
 | **S3 列表与快速新增** | 面板真实列表 + 快速新增 + 全局快捷键 + 空状态 | 冒烟：键盘输入标题回车 → 断言任务出现且刷新后仍在（重启后仍在 = 落库） |
-| **S4 详情与字段编辑** | 全屏详情、全部基础字段、即时保存（D9）、`Esc` 返回 | 冒烟：改优先级/截止 → 断言列表 chip 变化且重启后一致 |
+| **S4 详情与字段编辑 ✅** | 全屏详情、全部基础字段、即时保存（D9）、`Esc` 返回 | 冒烟：改优先级/截止 → 断言列表 chip 变化且重启后一致（24/24 实测通过） |
 | **S5 排序与拖拽** | 组内 DnD + 跨清单 + `Alt+↑/↓` | 冒烟：键盘上移 → 断言顺序；顺序重启后不变 |
 | **S6 子任务与重复** | 一层子任务 + `n/m`；重复预设 + 自定义；完成后生成下一次到期 | RRULE 单测；冒烟：钩上「每天」完成任务 → 断言下一次到期出现在明天 |
 | **S7 P1 收尾** | 撤销 + 批量 + 附件 | 冒烟：删除 → `Ctrl+Z` → 断言回来；批量改优先级 |
 | **S8（可选，M01 收尾）** | 右键菜单（快速新增 / 今天 / 设置 / 暂停提醒 / 退出）——S3 之后「快速新增」已有落点 | 冒烟：右键 → 断言菜单与首项行为 |
 
-S0–S4 是主干（P0 可用即可交付「能记事了」）；S5–S6 补齐 P0 剩余；S7/S8 视你拍板的范围取舍。
+S0–S4 已全部过门，主干可交付「能记事了」；S5–S6 补齐 P0 剩余；S7/S8 视你拍板的范围取舍。
 
 ---
 
@@ -184,7 +187,8 @@ S0–S4 是主干（P0 可用即可交付「能记事了」）；S5–S6 补齐 
 - **仓储层走真库单测**：D1 实测确认 `better-sqlite3` 是 Node-API 模块（ABI 无关），仓储层与迁移链可以直接在 Vitest 里用临时库验证，不必只靠 E2E
 - **冒烟**：新增 `npm run smoke:tasks`，沿用「真实系统输入 + `status.json` 事件流」的既有模式；断言点写到事件里，失败信息给出期望值
 - **可重复性**：冒烟用独立数据库文件，跑前删库 → 同一断言集可反复跑
-- **冒烟里的文本输入不走 OS 输入队列**：`smoke-tasks` 把标题以 `WM_CHAR` 直接投到面板窗口。走 `SendInput` 时，机器上处于组合态的输入法（TSF 系，`ImmAssociateContext` 管不到）会把首条标题组合成别的字，断言就变成在测那台机器的输入法；直投窗口同时免掉了「控制台把前台抢回去、面板随即失焦收起」这条噪声。快捷键仍走真实键盘：`RegisterHotKey` 只对来自输入队列的事件生效
+- **冒烟里的输入只有快捷键走 OS**：S3 曾用 `WM_CHAR` 把标题直投面板窗口以绕开输入法的组合态；S4 起改为通过 DevTools 协议把按键直接送进渲染进程，输入法与输入队列都不再参与，只有打开面板的全局快捷键仍必须来自真实输入（`RegisterHotKey` 只对输入队列产生的事件生效）
+- **冒烟里的控件定位走 DevTools 协议**（S4 起）：脚本按 `data-field` 名直接设焦点，不再靠数 Tab 次数。数次数的那版是坏的：Chromium 只在窗口持有前台时才认 Tab 这类焦点移动，脚本拿不到前台，于是 Tab 不改变焦点而按次数照按，随后的回车就落到别的控件上
 - **手动验收**（我会自己操控电脑跑一遍）：中文输入法下回车建任务、DPI 150%、约 500 条任务的滚动流畅度、多显示器上面板贴边
 - **性能取舍**：本轮**不做列表虚拟化**——先用真实数据量测一次；只有当渲染明显掉帧才引入（避免为不存在的问题写复杂代码），结论写回 §9.7 性能预算
 

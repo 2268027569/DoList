@@ -19,13 +19,10 @@ export function QuickAdd(): ReactElement {
   const field = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
+    // Whether the caret really landed here is checked from outside the renderer by
+    // the smoke harness, over the debugger protocol (§13) — no report needed.
     return window.api.on.quickAddFocus(() => {
       field.current?.focus();
-      // Whether the caret really landed is the one part of this path a smoke run
-      // cannot see from outside the renderer (§13).
-      void window.api.smoke.report('quick-add-focused', {
-        active: document.activeElement === field.current,
-      });
     });
   }, []);
 
@@ -48,6 +45,9 @@ export function QuickAdd(): ReactElement {
       value={title}
       aria-label={t('quickAdd.placeholder')}
       placeholder={t('quickAdd.placeholder')}
+      // The harness's address for this control: it focuses the panel's fields by
+      // name over the DevTools protocol rather than by pressing Tab (§13).
+      data-field="quick-add"
       onChange={(event) => setTitle(event.target.value)}
       onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
         if (event.key !== 'Enter') return;

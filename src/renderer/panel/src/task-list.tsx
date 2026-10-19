@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import type { ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { dueChip } from '@shared/utils/task-due-label';
+
 import { TaskRow } from './task-row';
 import { usePanelStore } from './store';
 
@@ -11,18 +13,30 @@ import { usePanelStore } from './store';
  * thing that makes it move.
  */
 export function TaskList(): ReactElement {
-  const { t } = useTranslation('tasks');
+  const { t, i18n } = useTranslation('tasks');
   const tasks = usePanelStore((state) => state.tasks);
   const status = usePanelStore((state) => state.tasksStatus);
 
   // What rendered is published so the smoke harness can assert that the panel
   // re-fetched and drew the new row, instead of only trusting the database (§13).
+  // The chips go with it, drawn by the same pure function the row uses, so a chip
+  // the harness cannot see there cannot pass here either (M02 S4).
+  //
+  // Reported only once a query result is in hand: the panel mounts with an empty
+  // store and draws an empty list for the frame or two before the first query
+  // lands, and a harness reading that frame would be reading nothing at all.
   useEffect(() => {
+    if (status !== 'ready') return;
     void window.api.smoke.report('tasks-rendered', {
       count: tasks.length,
       titles: tasks.map((task) => task.title),
+      rows: tasks.map((task) => ({
+        title: task.title,
+        priority: task.priority,
+        due: dueChip(task.dueAt, task.dueHasTime, i18n.language)?.text ?? null,
+      })),
     });
-  }, [tasks]);
+  }, [tasks, status, i18n.language]);
 
   if (status === 'error') {
     return (

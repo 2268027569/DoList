@@ -6,22 +6,25 @@ import type { BootParams } from '@shared/types/app';
 import { applyBootParams } from '../../shared-ui/boot';
 import { changeLocale } from '../../shared-ui/i18n';
 import { QuickAdd } from './quick-add';
+import { TaskDetail } from './task-detail';
 import { TaskList } from './task-list';
 import { usePanelStore } from './store';
 import { usePanelResize } from './use-panel-resize';
 
 /**
- * The panel surface: the Inbox, with quick add on top (M02-PLAN §6). The M0
- * settings block that used to live here was scaffolding proving the theme and
- * locale token pipeline; those controls belong to M06/M07/M10, and the task data
- * has arrived, so the shell itself is what got replaced.
+ * The panel surface: either the Inbox or the open task's detail, never both
+ * (M02 D6 — the panel is only 320–640 DIP wide, so the detail replaces the list
+ * instead of sitting beside it).
  */
 export function App({ boot }: { boot: BootParams }): ReactElement {
   const { t } = useTranslation(['common', 'tasks']);
   const setBoot = usePanelStore((state) => state.setBoot);
   const setPanelState = usePanelStore((state) => state.setPanelState);
   const refreshTasks = usePanelStore((state) => state.refreshTasks);
+  const refreshOpenTask = usePanelStore((state) => state.refreshOpenTask);
+  const closeTaskDetail = usePanelStore((state) => state.closeTaskDetail);
   const tasks = usePanelStore((state) => state.tasks);
+  const openTask = usePanelStore((state) => state.openTask);
   const [open, setOpen] = useState(false);
   const [durationMs, setDurationMs] = useState(160);
   const resize = usePanelResize();
@@ -34,11 +37,13 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
     void refreshTasks();
     // One write, one fetch: the main process announces what changed and this is
     // what turns that into rows, rather than keeping a second copy of the data
-    // in step by hand (M02 D4).
+    // in step by hand (M02 D4). The open detail is a second read, so it re-reads
+    // too — a task marked done here is the only way to see its own change.
     return window.api.on.taskChanged(() => {
       void refreshTasks();
+      void refreshOpenTask();
     });
-  }, [refreshTasks]);
+  }, [refreshTasks, refreshOpenTask]);
 
   useEffect(() => {
     return window.api.on.panelState(({ state, durationMs: duration }) => {
@@ -76,20 +81,28 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
         style={{ transitionDuration: `${durationMs}ms` }}
         onTransitionEnd={handleTransitionEnd}
       >
-        <header className="flex items-baseline justify-between gap-2">
-          <h1 className="text-base font-semibold tracking-tight text-[var(--text-primary)]">
-            {t('tasks:inbox.title')}
-          </h1>
-          <span className="text-xs text-[var(--text-muted)]">
-            {t('tasks:summary.pending', { count: tasks.length })}
-          </span>
-        </header>
+        {openTask === null ? (
+          <>
+            <header className="flex items-baseline justify-between gap-2">
+              <h1 className="text-base font-semibold tracking-tight text-[var(--text-primary)]">
+                {t('tasks:inbox.title')}
+              </h1>
+              <span className="text-xs text-[var(--text-muted)]">
+                {t('tasks:summary.pending', { count: tasks.length })}
+              </span>
+            </header>
 
-        <QuickAdd />
+            <QuickAdd />
 
-        <div className="flex-1 overflow-y-auto">
-          <TaskList />
-        </div>
+            <div className="flex-1 overflow-y-auto">
+              <TaskList />
+            </div>
+          </>
+        ) : (
+          // Keyed by the row so opening another task (or the same one again after
+          // a deletion) starts a fresh edit rather than inheriting the last draft.
+          <TaskDetail key={openTask.id} task={openTask} onBack={closeTaskDetail} />
+        )}
 
         {/*
          * Decorative for assistive tech on purpose: the panel is resized with a

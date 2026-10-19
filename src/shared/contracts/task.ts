@@ -79,6 +79,14 @@ export const taskPatchInput = z.object({
 export const taskUpdateInput = z.object({ id: identifier, patch: taskPatchInput });
 
 /**
+ * Reading one row back by id. The detail view is a full-screen replacement of the
+ * list, so its own query is this single row rather than the Inbox page: a task the
+ * user just marked done would otherwise fall out of the list filter and take the
+ * screen it is being edited on with it.
+ */
+export const taskGetInput = z.object({ id: identifier });
+
+/**
  * The id list a delete, restore or reorder carries. Bounded because a single IPC
  * message has no business naming thousands of rows.
  */

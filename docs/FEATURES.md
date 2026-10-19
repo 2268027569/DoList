@@ -89,8 +89,9 @@
 
 **M02 进度**（切片与验证见 [M02-PLAN.md](M02-PLAN.md)）：
 
-- 已完成：S0 测试地基（真 SQLite 临时库）、S1 数据层——迁移 `0002_task_fields.sql`、任务 / 标签 / 附件仓储、一层子任务与软删级联等不变量（ARCHITECTURE §5.1）；S2 IPC——任务域 zod 契约、6 条任务通道与 `event:task-changed`、`services/tasks.ts` 域服务、`notifyTasksChanged` 单一通知点、preload 白名单；S3 面板列表与快速新增——收件箱首绘（空状态 / 复选圆钮 / 标题 / 截止 chip / 优先级标）、`Ctrl+Shift+N` 唤起并把光标交给输入框、回车建任务后焦点留在框内继续输入、截止 chip 的纯逻辑单测，以及 `npm run smoke:tasks` 的真键盘冒烟（建 → 事件 → 角标 → 重绘 → 落库）。
-- 未完成：S4 起的详情面板与字段编辑、撤销栈、`rrule` 重复展开、排序拖拽、子任务、批量操作、M01 右键菜单——按切片顺序推进。
+- 已完成：S0 测试地基（真 SQLite 临时库）、S1 数据层——迁移 `0002_task_fields.sql`、任务 / 标签 / 附件仓储、一层子任务与软删级联等不变量（ARCHITECTURE §5.1）；S2 IPC——任务域 zod 契约、任务通道与 `event:task-changed`、`services/tasks.ts` 域服务、`notifyTasksChanged` 单一通知点、preload 白名单；S3 面板列表与快速新增——收件箱首绘（空状态 / 复选圆钮 / 标题 / 截止 chip / 优先级标）、`Ctrl+Shift+N` 唤起并把光标交给输入框、回车建任务后焦点留在框内继续输入、截止 chip 的纯逻辑单测；S4 详情与字段编辑——全屏替换式详情（标题 / 备注 / 截止含「含时刻」开关与今天·明天·清除 / 提前提醒 / 优先级 / 状态 / 标签增删 / 软删）、`task:get` 单行读取、即时保存（无保存按钮）、`Esc` 返回，`npm run smoke:tasks` 扩到 24 项断言（改截止与优先级 → `Esc` 回列表断言 chip → 重启后直读库一致）。
+- 未完成：S5 起的排序拖拽、子任务与 `rrule` 重复、撤销栈、批量操作、附件、M01 右键菜单——按切片顺序推进。
+- 详情面板**未做**的字段：预估 / 实际耗时（FEATURES 列为 P1 扩展字段，M02 §6 表里有，本轮先不做，等 S7 与附件一起收）；自然语言解析仍属 P1 且依赖 M06 语种词表。
 - 说明：数据层比计划收窄两处——不建 `repositories/lists.ts`（`list_id = NULL` 即收件箱）、不建 `taskTree()`（`queryTasks({ parentId })` 已覆盖一层子任务读取），等 M03 有真实消费者再补。
 
 ## M03 视图与组织（Views & Organization）

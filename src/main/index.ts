@@ -20,11 +20,24 @@ const log = createLogger('bootstrap');
 /** Must match `appId` in `build/electron-builder.yml` and the notification identity. */
 const APP_ID = 'com.yichen.todolist';
 const SMOKE = isSmokeEnabled();
+/** Where the smoke harness reaches the panel's DOM from outside (platform/smoke.ts). */
+const SMOKE_CDP_PORT = process.env['YICHEN_SMOKE_CDP_PORT'] ?? '9222';
 
 void start();
 
 async function start(): Promise<void> {
   app.setAppUserModelId(APP_ID);
+
+  if (SMOKE) {
+    // A smoke run is driven by a separate process, which has no way to call into
+    // this one: it reaches the panel's DOM over the DevTools protocol instead. That
+    // protocol delivers keys to the renderer directly, so the panel never needs the
+    // OS keyboard or its input queue — which is what made the old back-and-forth
+    // through SendInput and the IME so unreliable (§13). The port is opened only
+    // under `YICHEN_SMOKE`, so a real install has no debug listener at all.
+    app.commandLine.appendSwitch('remote-debugging-port', SMOKE_CDP_PORT);
+    app.commandLine.appendSwitch('remote-allow-origins', '*');
+  }
 
   if (!app.requestSingleInstanceLock()) {
     log('another instance already owns the single-instance lock, exiting');

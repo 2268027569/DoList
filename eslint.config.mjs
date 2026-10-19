@@ -44,6 +44,9 @@ export default tseslint.config(
         Buffer: 'readonly',
         fetch: 'readonly',
         URL: 'readonly',
+        // Node's own WebSocket client, used by the smoke harness to reach the
+        // panel over the DevTools protocol (scripts/smoke-tasks.mjs).
+        WebSocket: 'readonly',
         setTimeout: 'readonly',
         clearTimeout: 'readonly',
       },

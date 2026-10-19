@@ -47,6 +47,8 @@ export const IPC = {
   task: {
     /** Renderer -> main: fetch the tasks a filter selects. The main process owns the query. */
     query: 'task:query',
+    /** Renderer -> main: read one row by id, for the open detail view (M02 S4). */
+    get: 'task:get',
     create: 'task:create',
     update: 'task:update',
     /** Soft delete: the rows move to the recycle bin, they are not dropped. */

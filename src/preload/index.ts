@@ -45,6 +45,8 @@ const api = {
   task: {
     /** Filter fields mirror `TaskFilter`; the main process clamps the row window. */
     query: (filter: TaskQueryInput = {}) => invoke<TaskWithTags[]>(IPC.task.query, filter),
+    /** One row by id: the open detail view's own read (M02 S4). */
+    get: (id: string) => invoke<TaskWithTags | null>(IPC.task.get, { id }),
     create: (input: TaskCreateInput) => invoke<TaskWithTags>(IPC.task.create, input),
     update: (id: string, patch: TaskPatchInput) =>
       invoke<TaskWithTags>(IPC.task.update, { id, patch }),

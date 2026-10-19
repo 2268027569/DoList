@@ -2,6 +2,7 @@ import { IPC } from '@shared/contracts/channels';
 import { fail, ok } from '@shared/contracts/result';
 import {
   taskCreateInput,
+  taskGetInput,
   taskIdsInput,
   taskQueryInput,
   taskReorderInput,
@@ -13,6 +14,7 @@ import {
   createTaskFromInput,
   deleteTasks,
   listTasks,
+  readTask,
   reorderTaskGroup,
   restoreTasks,
   updateTaskFromPatch,
@@ -43,6 +45,16 @@ export function taskChannelHandlers(): ChannelHandler[] {
         const parsed = taskQueryInput.safeParse(payload ?? {});
         if (!parsed.success) return invalid(IPC.task.query, parsed.error.issues);
         return ok(listTasks(parsed.data));
+      },
+    },
+    {
+      channel: IPC.task.get,
+      run: (payload) => {
+        const parsed = taskGetInput.safeParse(payload);
+        if (!parsed.success) return invalid(IPC.task.get, parsed.error.issues);
+        // A missing row is `null`, not an error: the detail re-reads after every
+        // change, and by then the task may be in the recycle bin or gone.
+        return ok(readTask(parsed.data.id));
       },
     },
     {

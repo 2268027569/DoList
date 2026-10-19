@@ -8,18 +8,23 @@
  *
  *   1. the panel renderer reports its first query (an empty Inbox),
  *   2. the real global shortcut opens the panel and hands the caret to its field,
- *   3. a title sent to the panel's window, then Enter, creates a task,
+ *   3. a title typed into the quick-add field, then Enter, creates a task,
  *   4. the main process announces it (`task-changed`, with the badge it recomputed),
  *   5. the panel re-fetches and re-draws (`tasks-rendered`),
- *   6. the row is actually in SQLite — read straight from the smoke database.
+ *   6. the row is actually in SQLite — read straight from the smoke database,
+ *   7. the detail view opens on that row and its due date and priority are changed
+ *      (slice S4), and
+ *   8. a fresh launch reads those same values back off the disk.
  *
- * The panel is opened with the global shortcut (Ctrl/Cmd+Shift+N) rather than by
- * clicking the marker. That shortcut is what M02 adds, and it is exactly "open the
- * panel with the caret already in the field"; the marker's own click path is
- * covered by the marker harness. The run touches neither the cursor nor the
- * foreground window: a desktop somebody else is using cannot hold a scripted aim
- * still, and an injected click only lends the panel a foreground the injecting
- * console takes back — which the panel then reads as a user walking away.
+ * Only two things come from the OS: the global shortcut, which a registered hotkey
+ * only ever sees when the input queue produced it, and the app's own launch. Every
+ * other keystroke is delivered to the panel page over the DevTools protocol, which
+ * is explained where the client is built below.
+ *
+ * The run touches neither the cursor nor the foreground window: an injected click
+ * only lends the panel a foreground the injecting console takes back, which the
+ * panel then reads as a user walking away. The marker's own click path is covered
+ * by the marker harness instead.
  *
  * `YICHEN_SMOKE_DIR` and `YICHEN_SMOKE_DB` keep the run off the real profile: the
  * database starts empty every time.
@@ -38,7 +43,8 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const smokeDir = process.env.YICHEN_SMOKE_DIR ?? join(tmpdir(), 'yichen-todo-smoke-tasks');
-const statusFile = join(smokeDir, 'status.json');
+/** Reassigned when the run relaunches the app on the same database (phase 5). */
+let statusFile = join(smokeDir, 'status.json');
 const ps1File = join(smokeDir, 'drive-input.ps1');
 const databaseFile = join(smokeDir, 'smoke.db');
 
@@ -85,25 +91,20 @@ async function waitForEvent(type, timeoutMs, since = 0) {
 }
 
 /**
- * Real OS input through PowerShell: a keystroke chord, or text delivered to the
- * app's own window.
+ * The one keystroke that has to come from the OS.
  *
- * The chord goes through the OS input queue, because a registered global shortcut
- * only fires for input that came from there. The text does not: it is posted to the
- * panel window instead, because a run on a machine whose IME is in a composing mode
- * would otherwise have its title composed into something else entirely, and the
- * assertion would then be about that machine's IME rather than about the app.
+ * A registered global shortcut is only ever fired for input the OS input queue
+ * produced, so the chord that opens the panel cannot be sent over the DevTools
+ * protocol — the app would never see it.
  */
-function driveInput({ hotkey, type, targetPid, compileCheck }) {
+function sendHotkey(hotkey, compileCheck) {
   const args = ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ps1File];
-  if (hotkey !== undefined) args.push('-Hotkey', hotkey);
-  if (targetPid !== undefined) args.push('-TargetPid', String(targetPid));
   if (compileCheck === true) args.push('-CompileCheck');
-  if (type !== undefined) args.push('-Type', type);
+  else args.push('-Hotkey', hotkey);
 
   // stderr is carried through rather than dropped: PowerShell reports a failure to
   // compile the helper there while still exiting 0, and a helper that silently did
-  // nothing would be read as the app ignoring the input.
+  // nothing would be read as the app ignoring the shortcut.
   const result = spawnSync('powershell.exe', args, { encoding: 'utf8' });
   const stdout = result.stdout ?? '';
   const stderr = result.stderr ?? '';
@@ -114,6 +115,158 @@ function driveInput({ hotkey, type, targetPid, compileCheck }) {
   return { stdout, stderr };
 }
 
+/**
+ * The panel's DOM over the DevTools protocol.
+ *
+ * A smoke run is its own process and has no way to call into the app, so the panel
+ * used to be driven through the OS: keys were posted to its window, and text had to
+ * skip the OS input queue because an IME in a composing mode rewrote it. That route
+ * cannot move focus: Chromium treats focus navigation as its own job and honours it
+ * only while the window really holds the foreground, which a scripted run never
+ * has — so Tab produced no focus change, the harness pressed Tab a fixed number of
+ * times anyway, and the Enter that followed landed on whatever was still focused
+ * (twice marking a task done instead of opening it).
+ *
+ * The protocol fixes the root cause rather than the symptom: the harness attaches
+ * to the panel page and addresses a control by the name the panel gives it, with
+ * keys delivered to the renderer directly. No OS input queue, no IME, no foreground
+ * window, and no counting. `--remote-debugging-port` is opened only under
+ * `YICHEN_SMOKE` (main/index.ts), so a real install has no debug listener at all.
+ */
+const CDP_PORT = process.env.YICHEN_SMOKE_CDP_PORT ?? '9222';
+
+/** The panel page's debugger address, retried while the app is still coming up. */
+async function panelTarget(timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`);
+      const targets = await response.json();
+      const panel = targets.find(
+        (entry) => entry.type === 'page' && entry.url.split('?')[0].endsWith('/panel/index.html'),
+      );
+      if (panel !== undefined) return panel;
+    } catch {
+      // The port is not listening yet; the app is still starting.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return null;
+}
+
+/** Attaches to the panel page and returns a client, or `null` if it never appeared. */
+async function attachPanel(timeoutMs = 20_000) {
+  const target = await panelTarget(timeoutMs);
+  if (target === null) return null;
+
+  const socket = new WebSocket(target.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => {
+    socket.addEventListener('open', resolve, { once: true });
+    socket.addEventListener('error', () => reject(new Error('the panel socket refused')), {
+      once: true,
+    });
+  });
+
+  let nextId = 1;
+  const pending = new Map();
+  socket.addEventListener('message', (event) => {
+    let message;
+    try {
+      message = JSON.parse(typeof event.data === 'string' ? event.data : '');
+    } catch {
+      return;
+    }
+    const entry = pending.get(message.id);
+    if (entry === undefined) return;
+    pending.delete(message.id);
+    if (message.error !== undefined) entry.reject(new Error(message.error.message));
+    else entry.resolve(message.result);
+  });
+
+  const send = (method, params) =>
+    new Promise((resolve, reject) => {
+      const id = nextId;
+      nextId += 1;
+      pending.set(id, { resolve, reject });
+      socket.send(JSON.stringify({ id, method, params }));
+    });
+
+  return { send, close: () => socket.close() };
+}
+
+/** Runs an expression in the panel page and returns its value. */
+async function evaluate(cdp, expression) {
+  const result = await cdp.send('Runtime.evaluate', {
+    expression,
+    returnByValue: true,
+    awaitPromise: false,
+  });
+  if (result.exceptionDetails !== undefined) {
+    throw new Error(result.exceptionDetails.text ?? 'the panel expression threw');
+  }
+  return result.result.value;
+}
+
+/**
+ * Puts the keyboard on a control by the name the panel gives it, and reports the
+ * name it landed on. `taskId` narrows a name to one row when the list has several.
+ */
+async function focusField(cdp, field, taskId = null) {
+  const landed = await evaluate(
+    cdp,
+    `(() => {
+       const wanted = ${JSON.stringify(field)};
+       const taskId = ${JSON.stringify(taskId)};
+       const candidates = [...document.querySelectorAll('[data-field="' + wanted + '"]')];
+       const node = taskId === null ? candidates[0] : candidates.find((each) => each.dataset.taskId === taskId);
+       if (node === undefined) return null;
+       node.focus();
+       return node === document.activeElement ? node.dataset.field : null;
+     })()`,
+  );
+  return landed;
+}
+
+/** Where the caret is now, by field name — the panel's own answer, not a guess. */
+async function activeField(cdp) {
+  return evaluate(
+    cdp,
+    `(document.activeElement && document.activeElement.dataset
+        ? document.activeElement.dataset.field || null
+        : null)`,
+  );
+}
+
+/** A key press delivered by the renderer itself, so no OS queue is involved. */
+async function pressKey(cdp, key) {
+  const virtualKey = { Enter: 13, Tab: 9, Escape: 27 }[key] ?? 0;
+  const base = {
+    key,
+    code: key,
+    windowsVirtualKeyCode: virtualKey,
+    nativeVirtualKeyCode: virtualKey,
+  };
+  // Enter carries a character so Chromium runs the same default action a typed one
+  // does (activating a button or submitting through the field).
+  const withText = key === 'Enter' ? { ...base, text: '\r', unmodifiedText: '\r' } : base;
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...withText });
+  await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+}
+
+/** Types text as key events: no IME can compose it and no queue can swallow it. */
+async function typeText(cdp, text) {
+  for (const character of text) {
+    await cdp.send('Input.dispatchKeyEvent', {
+      type: 'keyDown',
+      key: character,
+      code: character,
+      text: character,
+      unmodifiedText: character,
+    });
+    await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', key: character, code: character });
+  }
+}
+
 /** Reads the rows straight out of the smoke database (WAL, so a read is safe). */
 function readTasks() {
   const Database = require('better-sqlite3');
@@ -122,7 +275,8 @@ function readTasks() {
     db.pragma('busy_timeout = 5000');
     return db
       .prepare(
-        'SELECT title, status, list_id AS listId, parent_id AS parentId, deleted_at AS deletedAt ' +
+        'SELECT id, title, status, priority, due_at AS dueAt, due_has_time AS dueHasTime, ' +
+          'list_id AS listId, parent_id AS parentId, deleted_at AS deletedAt ' +
           'FROM tasks ORDER BY sort_order ASC, created_at ASC',
       )
       .all();
@@ -131,11 +285,43 @@ function readTasks() {
   }
 }
 
+/** Local midnight tomorrow, worked out the same way the panel's own "Tomorrow" does. */
+function tomorrowStart() {
+  const date = new Date();
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime();
+}
+
+/** Starts the app against a smoke profile; the panel opens on its own DB. */
+function launchApp(electronBinary, dir) {
+  return spawn(electronBinary, ['.'], {
+    cwd: root,
+    env: {
+      ...process.env,
+      YICHEN_SMOKE: '1',
+      YICHEN_SMOKE_DIR: dir,
+      YICHEN_SMOKE_DB: databaseFile,
+    },
+    stdio: ['ignore', 'inherit', 'inherit'],
+  });
+}
+
+/** Kills the app process and the panel it spawned, on either platform. */
+function stopApp(child) {
+  if (process.platform === 'win32' && child.pid !== undefined) {
+    try {
+      execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+      return;
+    } catch {
+      // Taskkill not finding it just means it was already gone; fall through to the
+      // platform-neutral kill so the harness never leaves a process behind.
+    }
+  }
+  child.kill();
+}
+
 const PS1 = String.raw`
 param(
-  [string]$Type = '',
   [string]$Hotkey = '',
-  [int]$TargetPid = 0,
   [switch]$CompileCheck
 )
 
@@ -168,17 +354,7 @@ public static class YichenInput {
   [StructLayout(LayoutKind.Sequential)]
   private struct INPUT { public uint type; public INPUTUNION u; }
 
-  [StructLayout(LayoutKind.Sequential)]
-  private struct RECT { public int left; public int top; public int right; public int bottom; }
-
-  private delegate bool EnumWindowsProc(IntPtr hwnd, IntPtr param);
-
   [DllImport("user32.dll")] private static extern uint SendInput(uint count, INPUT[] inputs, int size);
-  [DllImport("user32.dll")] private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr param);
-  [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")] private static extern uint OwningProcessOf(IntPtr hwnd, out uint pid);
-  [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr hwnd);
-  [DllImport("user32.dll")] private static extern bool GetWindowRect(IntPtr hwnd, out RECT rect);
-  [DllImport("user32.dll")] private static extern bool PostMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
 
   private const uint KEYBOARD = 1;
   private const uint KEYUP = 0x0002;
@@ -189,11 +365,6 @@ public static class YichenInput {
   private const ushort VK_SHIFT = 0xA0;
   private const ushort VK_MENU = 0xA4;
   private const ushort VK_LWIN = 0x5B;
-  private const ushort VK_RETURN = 0x0D;
-
-  private const uint WM_KEYDOWN = 0x0100;
-  private const uint WM_KEYUP = 0x0101;
-  private const uint WM_CHAR = 0x0102;
 
   private static void Send(INPUT input) {
     INPUT[] batch = new INPUT[1];
@@ -232,51 +403,6 @@ public static class YichenInput {
     Thread.Sleep(40);
     for (int index = modifiers.Count - 1; index >= 0; index--) WithVirtualKey(modifiers[index], false);
   }
-
-  // The app's biggest visible window is its panel; the marker beside it is far
-  // smaller, and the rest are hidden.
-  private static IntPtr PanelWindowOf(uint pid) {
-    IntPtr target = IntPtr.Zero;
-    long largest = 0;
-    EnumWindows((hwnd, param) => {
-      uint owner;
-      OwningProcessOf(hwnd, out owner);
-      if (owner != pid || !IsWindowVisible(hwnd)) return true;
-      RECT rect;
-      if (!GetWindowRect(hwnd, out rect)) return true;
-      long area = (long)(rect.right - rect.left) * (long)(rect.bottom - rect.top);
-      if (area > largest) { largest = area; target = hwnd; }
-      return true;
-    }, IntPtr.Zero);
-    return target;
-  }
-
-  // Posted straight to the window's message queue instead of going through the OS
-  // input queue: the composing state of whatever IME the machine is running never
-  // touches it, and neither the cursor nor the foreground window is involved.
-  public static bool PostText(uint pid, string text) {
-    IntPtr target = PanelWindowOf(pid);
-    if (target == IntPtr.Zero) return false;
-
-    const string enter = "{ENTER}";
-    int index = 0;
-    while (index < text.Length) {
-      if (index + enter.Length <= text.Length && text.Substring(index, enter.Length) == enter) {
-        PostMessage(target, WM_KEYDOWN, (IntPtr)VK_RETURN, IntPtr.Zero);
-        Thread.Sleep(40);
-        PostMessage(target, WM_KEYUP, (IntPtr)VK_RETURN, IntPtr.Zero);
-        Thread.Sleep(80);
-        index += enter.Length;
-        continue;
-      }
-
-      char character = text[index];
-      PostMessage(target, WM_CHAR, (IntPtr)(ushort)character, IntPtr.Zero);
-      Thread.Sleep(20);
-      index++;
-    }
-    return true;
-  }
 }
 '@
 }
@@ -294,26 +420,50 @@ if ($Hotkey -ne '') {
   # the input.
   Write-Output "modifiers:$([System.Windows.Forms.Control]::ModifierKeys)"
 }
-
-if ($Type -ne '' -and $TargetPid -gt 0) {
-  if ([YichenInput]::PostText([uint32]$TargetPid, $Type)) {
-    Write-Output 'typed:yes'
-  } else {
-    Write-Output 'typed:no'
-  }
-}
 `;
 
-/** Sends a title to the app's panel window and presses Enter. */
-async function typeTask(title, pid) {
+/**
+ * Types a title into the quick-add field and presses Enter. The field is focused by
+ * name first, so this never depends on where the caret happened to already be.
+ */
+async function typeTask(cdp, title, expectField = null) {
+  if (expectField !== null) {
+    const landed = await focusField(cdp, expectField);
+    if (landed !== expectField) {
+      fail(`the panel has no focusable "${expectField}" control`);
+      return null;
+    }
+  }
+
   const since = Date.now();
-  driveInput({ type: `${title}{ENTER}`, targetPid: pid });
-  const changed = await waitForEvent('task-changed', 6_000, since);
+  await typeText(cdp, title);
+  await pressKey(cdp, 'Enter');
+  const changed = await waitForEvent('task-changed', 8_000, since);
   if (changed === null) {
-    fail(`typing "${title}" and pressing Enter produced no task — the quick-add field may not have had focus`);
+    fail(`typing "${title}" and pressing Enter produced no task`);
     return null;
   }
   return changed;
+}
+
+/**
+ * Puts the keyboard on a named control and returns the name it landed on. The panel
+ * names every control it wants a harness to reach, so a control that moves or gets
+ * inserted above another cannot shift this the way counted Tab presses did.
+ */
+async function gotoField(cdp, field, taskId = null) {
+  const landed = await focusField(cdp, field, taskId);
+  if (landed !== field) {
+    fail(`the panel has no focusable "${field}"${taskId === null ? '' : ` on ${taskId}`} control`);
+  }
+  return landed;
+}
+
+/** Activates the focused control and reports the write the app announced for it. */
+async function pressKeyAndWait(cdp, key, timeoutMs = 8_000) {
+  const since = Date.now();
+  await pressKey(cdp, key);
+  return waitForEvent('task-changed', timeoutMs, since);
 }
 
 async function main() {
@@ -329,12 +479,12 @@ async function main() {
   // The helper is C# compiled at runtime, and PowerShell exits 0 even when that
   // compilation fails. Checked up front, so a broken harness is never reported as
   // an application that ignored its input.
-  const compiled = driveInput({ compileCheck: true });
+  const compiled = sendHotkey(undefined, true);
   if (compiled.stderr.trim() !== '' || !compiled.stdout.includes('compiled')) {
-    console.error('[smoke] the PowerShell input helper did not compile; refusing to report on the app.');
+    console.error('[smoke] the PowerShell hotkey helper did not compile; refusing to report on the app.');
     process.exit(2);
   }
-  log('the input helper compiled');
+  log('the hotkey helper compiled');
 
   if (!skipBuild) {
     log('building renderer + main bundles');
@@ -348,19 +498,9 @@ async function main() {
 
   const electronBinary = require('electron');
   log('launching electron');
-  const child = spawn(electronBinary, ['.'], {
-    cwd: root,
-    env: {
-      ...process.env,
-      YICHEN_SMOKE: '1',
-      YICHEN_SMOKE_DIR: smokeDir,
-      YICHEN_SMOKE_DB: databaseFile,
-    },
-    stdio: ['ignore', 'inherit', 'inherit'],
-  });
-  // The panel window belongs to this process, which is how the helper finds it to
-  // post the titles to (§13: the text bypasses the OS input queue and the IME).
-  const electronPid = child.pid ?? 0;
+  let child = launchApp(electronBinary, smokeDir);
+  /** The panel page, once the app is up; reassigned on the restart in phase 5. */
+  let cdp = null;
 
   try {
     // --- phase 0: boot --------------------------------------------------------
@@ -383,13 +523,21 @@ async function main() {
       fail(`the fresh database already had ${firstRender.detail?.count} task(s) rendered`);
     }
 
+    cdp = await attachPanel(20_000);
+    if (cdp === null) {
+      fail(`the panel page never appeared on the debugger port ${CDP_PORT}`);
+      return;
+    }
+    log(`attached to the panel page over the debugger port ${CDP_PORT}`);
+
     // --- phase 1: open the panel with the global shortcut ---------------------
     // Retried, because a chord sent before the window manager has settled is
-    // swallowed like any other keystroke.
+    // swallowed like any other keystroke. This is the only OS input the run makes:
+    // a registered hotkey never fires for input it did not see on the queue.
     let opened = null;
     for (let attempt = 1; attempt <= 3 && opened === null; attempt += 1) {
       const since = Date.now();
-      driveInput({ hotkey: 'ctrl+shift+n' });
+      sendHotkey('ctrl+shift+n');
       opened = await waitForEvent('panel-expanded', 2_000, since);
       if (opened === null) log(`the shortcut did not open the panel on attempt ${attempt} — retrying`);
     }
@@ -399,21 +547,23 @@ async function main() {
     }
     pass('the quick-add shortcut opened the panel', opened.detail);
 
-    const focus = await waitForEvent('quick-add-focused', 5_000, opened.at);
-    if (focus?.detail?.active === true) {
+    // Verified from inside the page rather than from the app's own report, so the
+    // "the caret is in the field" claim is about the DOM, not about a callback
+    // that claimed it had been called.
+    const focusedNow = await activeField(cdp);
+    if (focusedNow === 'quick-add') {
       pass('opening the panel put the caret in the quick-add field');
     } else {
-      fail(`the caret did not land in the quick-add field: ${JSON.stringify(focus?.detail ?? null)}`);
+      fail(`the caret is on "${focusedNow}", expected the quick-add field`);
     }
 
-    // Nothing is clicked here on purpose. An injected click does give the panel the
+    // Nothing is clicked here on purpose: an injected click does give the panel the
     // OS foreground, but the console that injected it takes that foreground straight
-    // back, and the panel reads the resulting blur as a user who walked away: it
-    // collapses. The text is posted directly to the panel window, so the run never
-    // needs the foreground at all.
+    // back, and the panel reads the resulting blur as a user who walked away. Keys
+    // sent over the debugger protocol never need the foreground at all.
 
-    // --- phase 2: create the first task with real keystrokes ------------------
-    const created = await typeTask(FIRST_TASK, electronPid);
+    // --- phase 2: create the first task --------------------------------------
+    const created = await typeTask(cdp, FIRST_TASK);
     if (created === null) return;
 
     if (created.detail?.kind === 'created' && (created.detail?.ids?.length ?? 0) === 1) {
@@ -458,10 +608,18 @@ async function main() {
       fail(`the row defaults are wrong: ${JSON.stringify(rows[0] ?? null)}`);
     }
 
-    // --- phase 3: a second task, without touching the mouse again -------------
-    // The caret stays in the field after Enter, so typing must keep working —
-    // that is the difference between quick add and a one-shot form.
-    const second = await typeTask(SECOND_TASK, electronPid);
+    // --- phase 3: a second task, with the caret left where it was -------------
+    // The caret stays in the field after Enter, so typing must keep working without
+    // anything re-focusing it — that is the difference between quick add and a
+    // one-shot form.
+    const stillThere = await activeField(cdp);
+    if (stillThere === 'quick-add') {
+      pass('the caret stayed in the quick-add field after Enter');
+    } else {
+      fail(`the caret moved to "${stillThere}" after storing a task`);
+    }
+
+    const second = await typeTask(cdp, SECOND_TASK);
     if (second === null) return;
 
     if (second.detail?.badge === 2) {
@@ -483,17 +641,124 @@ async function main() {
     } else {
       fail(`the database holds ${JSON.stringify(rows)}, expected both titles in order`);
     }
-  } finally {
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    if (process.platform === 'win32' && child.pid !== undefined) {
-      try {
-        execFileSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
-      } catch {
-        child.kill();
-      }
+
+    // --- phase 4: the detail view edits the first task (slice S4) -------------
+    const firstId = rows[0].id;
+    const onRow = await gotoField(cdp, 'task-title', firstId);
+    if (onRow === 'task-title') pass('the first row took the focus by name');
+
+    const detailOpened = await (async () => {
+      const since = Date.now();
+      await pressKey(cdp, 'Enter');
+      return waitForEvent('detail-opened', 5_000, since);
+    })();
+    if (
+      detailOpened?.detail?.title === FIRST_TASK &&
+      detailOpened?.detail?.taskId === firstId &&
+      detailOpened?.detail?.focused === true
+    ) {
+      pass('Enter on the row opened its detail with the caret in the title', detailOpened.detail);
     } else {
-      child.kill();
+      fail(`the detail did not open on the expected row: ${JSON.stringify(detailOpened?.detail ?? null)}`);
     }
+
+    await gotoField(cdp, 'detail-due-tomorrow');
+    const dueChanged = await pressKeyAndWait(cdp, 'Enter');
+    if (dueChanged?.detail?.kind === 'updated') {
+      pass('pressing "Tomorrow" saved the due date', dueChanged.detail);
+    } else {
+      fail(`the due date edit produced no update: ${JSON.stringify(dueChanged?.detail ?? null)}`);
+    }
+
+    rows = readTasks();
+    if (rows[0].dueAt === tomorrowStart() && rows[0].dueHasTime === 0) {
+      pass('the due date is tomorrow at local midnight, date only', {
+        dueAt: rows[0].dueAt,
+        expected: tomorrowStart(),
+      });
+    } else {
+      fail(`the due date landed on ${rows[0].dueAt}, expected ${tomorrowStart()} with no clock time`);
+    }
+
+    await gotoField(cdp, 'detail-priority-high');
+    const priorityChanged = await pressKeyAndWait(cdp, 'Enter');
+    if (priorityChanged?.detail?.kind === 'updated') {
+      pass('pressing "High priority" saved the priority', priorityChanged.detail);
+    } else {
+      fail(`the priority edit produced no update: ${JSON.stringify(priorityChanged?.detail ?? null)}`);
+    }
+
+    rows = readTasks();
+    if (rows[0].priority === 3) {
+      pass('the priority is stored as High (3)', { priority: rows[0].priority });
+    } else {
+      fail(`the priority is ${rows[0].priority}, expected 3`);
+    }
+
+    // --- phase 4b: Escape goes back to the list ------------------------------
+    const since = Date.now();
+    await pressKey(cdp, 'Escape');
+    const detailClosed = await waitForEvent('detail-closed', 5_000, since);
+    const backToList = await waitForEvent('tasks-rendered', 5_000, since);
+    if (detailClosed !== null && detailClosed.detail?.taskId === firstId) {
+      pass('Escape closed the detail');
+    } else {
+      fail(`Escape did not close the detail: ${JSON.stringify(detailClosed?.detail ?? null)}`);
+    }
+    // The chips are drawn by the same pure function the row uses, so reading them
+    // here is the list's own report of what the two edits produced.
+    if (backToList?.detail?.rows?.[0]?.priority === 3 && backToList.detail.rows[0].due !== null) {
+      pass('the list drew the edited priority chip and a due chip', backToList.detail.rows[0]);
+    } else {
+      fail(`the list drew ${JSON.stringify(backToList?.detail?.rows?.[0] ?? null)}, expected priority 3 and a due chip`);
+    }
+
+    // --- phase 5: the edits are still there after a restart -------------------
+    // A second launch of the same build against the same database file: what the
+    // panel shows now came off the disk rather than out of the first run's memory.
+    // The rows are read once more before the app is stopped, so a database that
+    // went missing would be reported here rather than as an app that lost its data.
+    const beforeRestart = readTasks();
+    if (beforeRestart.length === 2 && beforeRestart[0].priority === 3) {
+      pass('the edits are on disk before the restart', beforeRestart[0]);
+    } else {
+      fail(`the database reads ${JSON.stringify(beforeRestart)} just before the restart`);
+    }
+
+    log('restarting electron against the same database');
+    cdp.close();
+    stopApp(child);
+    // Taskkill reports when the process is gone, but the database file is released
+    // a moment later; the relaunch opens it straight away, so give it that moment.
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    const restartDir = join(smokeDir, 'restart');
+    mkdirSync(restartDir, { recursive: true });
+    statusFile = join(restartDir, 'status.json');
+    child = launchApp(electronBinary, restartDir);
+
+    const restarted = await waitForEvent('ready', 45_000);
+    if (restarted === null) {
+      fail('the app never reported ready after the restart');
+      return;
+    }
+    const restartRender = await waitForEvent('tasks-rendered', 20_000, restarted.at);
+    if (restartRender?.detail?.count === 2) {
+      pass('the restarted app read both tasks back', { count: restartRender.detail.count });
+    } else {
+      fail(`the restarted app drew ${JSON.stringify(restartRender?.detail ?? null)}, expected two rows`);
+    }
+    if (
+      restartRender?.detail?.rows?.[0]?.priority === 3 &&
+      restartRender?.detail?.rows?.[0]?.due !== null
+    ) {
+      pass('the restarted app shows the edited priority and due chip', restartRender.detail.rows[0]);
+    } else {
+      fail(`after the restart the first row reads ${JSON.stringify(restartRender?.detail?.rows?.[0] ?? null)}`);
+    }
+  } finally {
+    if (cdp !== null) cdp.close();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    stopApp(child);
   }
 }
 
