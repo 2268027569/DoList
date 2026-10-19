@@ -485,6 +485,9 @@ async function main() {
       ...process.env,
       YICHEN_SMOKE: '1',
       YICHEN_SMOKE_DIR: smokeDir,
+      // Its own database, inside the directory wiped above: the run starts from
+      // an empty schema every time and never touches the real user data.
+      YICHEN_SMOKE_DB: join(smokeDir, 'smoke.db'),
       ...(focusable ? { YICHEN_SMOKE_FOCUSABLE: '1' } : {}),
     },
     stdio: ['ignore', 'inherit', 'inherit'],

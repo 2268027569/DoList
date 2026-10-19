@@ -1,4 +1,5 @@
 import initSql from './0001_init.sql?raw';
+import taskFieldsSql from './0002_task_fields.sql?raw';
 
 /**
  * Migrations are embedded into the bundle — packaging never has to ship loose
@@ -14,4 +15,5 @@ export interface Migration {
 
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: '0001_init', sql: initSql },
+  { version: 2, name: '0002_task_fields', sql: taskFieldsSql },
 ];

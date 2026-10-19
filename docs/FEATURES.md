@@ -87,6 +87,12 @@
 | 富文本粘贴 | 多行粘贴拆成多任务；粘贴 URL 自动抓标题 | P2 |
 | 复制能力 | 复制为任务 / Markdown / 链接 | P2 |
 
+**M02 进度**（切片与验证见 [M02-PLAN.md](M02-PLAN.md)）：
+
+- 已完成：S0 测试地基（真 SQLite 临时库）、S1 数据层——迁移 `0002_task_fields.sql`、任务 / 标签 / 附件仓储、一层子任务与软删级联等不变量（ARCHITECTURE §5.1），真库用例 30 例。
+- 未完成：S2 起的 IPC 契约与 handlers、撤销栈、面板列表与详情、`rrule` 重复展开、批量操作、M01 右键菜单——按切片顺序推进。
+- 说明：数据层比计划收窄两处——不建 `repositories/lists.ts`（`list_id = NULL` 即收件箱）、不建 `taskTree()`（`queryTasks({ parentId })` 已覆盖一层子任务读取），等 M03 有真实消费者再补。
+
 ## M03 视图与组织（Views & Organization）
 
 | 功能点 | 说明 | 优先级 |

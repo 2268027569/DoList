@@ -42,7 +42,18 @@
 
 - M02 模块级实施计划：[docs/M02-PLAN.md](docs/M02-PLAN.md)（数据层、IPC 契约、面板界面、8 个切片与验证方式；RRULE 采用 `rrule`、详情为全屏替换式、P1 与 M01 右键菜单本轮一并完成）
 - 测试地基：新增 `src/main/db/test-db.ts` 的 `withTempDatabase()`，仓储层与迁移链改为在 Vitest 直连临时 SQLite 上验证；首个真库用例（`markerCounts`）覆盖空库、逾期边界、今日窗口、软删过滤与本地午夜分界，共 4 例
-- 冒烟可重复：`paths.databaseFile()` 支持 `YICHEN_SMOKE_DB`（仅在 `YICHEN_SMOKE=1` 下生效），使冒烟脚本用独立数据库、不污染也不依赖真实用户配置
+- 冒烟可重复：`paths.databaseFile()` 支持 `YICHEN_SMOKE_DB`（仅在 `YICHEN_SMOKE=1` 下生效），冒烟脚本据此把数据库指向自己那份临时文件，每次运行都从空 schema 开始、不污染也不依赖真实用户数据
 - 更正一处先前的错误判断：`better-sqlite3` v13 是 Node-API（`node-addon-api`）模块，ABI 无关，Electron 与开发机的 Node 加载同一份 prebuild；ARCHITECTURE §4 / §11 / §12 的对应措辞已更正
+
+#### S1 数据层
+
+- 迁移 `0002_task_fields.sql`：给 `tasks` 加 `remind_lead_min`（提前 N 分钟提醒，NULL = 不提醒）。只存用户意图，提醒实例留给 M04 的调度器展开
+- `shared/types/task.ts`：任务实体、草稿 / 补丁、过滤对象与重排分组类型，主进程、preload 与面板共用
+- `shared/utils/id.ts`：UUID v7 生成器（48 位毫秒前缀），索引局部性与同步合并顺序都靠它，随机 v4 给不了
+- `shared/utils/task-query.ts`：过滤对象 → SQL 片段 + 绑定参数；排序走白名单（非法值回落到手动顺序）、LIKE 通配符转义、行窗口上限 500
+- `repositories/tasks.ts`：`createTask` / `updateTask` / `getTask` / `queryTasks` / `reorderTasks` / `softDelete` / `restore`，并保留既有 `markerCounts`；不变量（子任务只一层、软删级联子任务、恢复只带出同一墓碑时间戳、`completed_at` 跟随勾选、一次写入一个事务）落在仓储层而非只写在文档里
+- `repositories/tags.ts`：标签按名去重创建，`tagsOfTasks` 一次查询取回一组任务的标签名
+- `repositories/attachments.ts`：只存文件路径引用，不复制文件
+- 测试：`tasks.test.ts` 扩到 27 例、新增 `tags.test.ts`（6 例）与 `attachments.test.ts`（5 例），全部在真 SQLite 临时库上跑；`id.test.ts` 与 `task-query.test.ts` 覆盖纯逻辑，共 107 例
 
 [Unreleased]: https://github.com/2268027569/DoList/commits/main

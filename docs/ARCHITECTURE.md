@@ -168,6 +168,14 @@ toDoList/
 - 迁移版本存在 `meta` 表，迁移文件不可修改，只追加；每次启动检查并顺序执行。
 - 连接开启 `journal_mode = WAL`、`foreign_keys = ON`、`synchronous = NORMAL`、`busy_timeout = 5000`。
 
+M02 把下面几条写进了仓储层（`src/main/db/repositories/`），而不是只写在文档里：
+
+- **子任务只允许一层**：`parent_id` 指向的任务自身必须是顶层、且不在回收站；创建时校验，不依赖界面的约束。
+- **子任务跟随父任务**：完成父任务不级联子任务；软删父任务时子任务在同一事务内一并软删，恢复时只带出**墓碑时间戳相同**的子任务——单独删过的那个留在回收站。
+- **一次写入一个事务**，并返回受影响行数，供撤销栈（M02 D7）与变更事件（M02 D4）使用。
+- 行 id 由 `shared/utils/id.ts` 的 `newId()` 生成 UUID v7；`now` 由调用方传入而非各写路径自己读时钟，这样同一动作的多次写入共享时间戳，测试也可确定。
+- `sort_order` 是**组内**序号：顶层任务按 `list_id` 分组、子任务按 `parent_id` 分组；只有插入到中间时整体重排（M02 D3）。
+
 ### 5.2 表结构
 
 ```sql
@@ -202,6 +210,7 @@ CREATE TABLE tasks (
   repeat_mode    TEXT,                           -- fixed | after_completion
   estimate_min   INTEGER,
   actual_min     INTEGER,
+  remind_lead_min INTEGER,                       -- 提前 N 分钟提醒；NULL = 不提醒（M02 加列）
   sort_order     INTEGER NOT NULL DEFAULT 0,
   created_at     INTEGER NOT NULL,
   updated_at     INTEGER NOT NULL,
