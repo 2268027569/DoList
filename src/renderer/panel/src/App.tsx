@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { ReactElement, TransitionEvent } from 'react';
+import type { ReactElement, ReactNode, TransitionEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { BootParams } from '@shared/types/app';
@@ -24,6 +24,8 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
   const refreshOpenTask = usePanelStore((state) => state.refreshOpenTask);
   const closeTaskDetail = usePanelStore((state) => state.closeTaskDetail);
   const undo = usePanelStore((state) => state.undo);
+  const view = usePanelStore((state) => state.view);
+  const setView = usePanelStore((state) => state.setView);
   const tasks = usePanelStore((state) => state.tasks);
   const openTask = usePanelStore((state) => state.openTask);
   const [open, setOpen] = useState(false);
@@ -53,6 +55,17 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
       setOpen(state !== 'collapsing');
     });
   }, [setPanelState]);
+
+  // The app menu's 今日 item (M02 S8) asks for a view rather than moving the window
+  // itself: the view lives here, and the tabs below set the same field. Opening
+  // straight onto the list keeps the detail from sitting on top of the view the
+  // user just asked for.
+  useEffect(() => {
+    return window.api.on.panelView(({ view: next }) => {
+      closeTaskDetail();
+      void setView(next);
+    });
+  }, [closeTaskDetail, setView]);
 
   useEffect(() => {
     return window.api.on.themeChanged((params) => {
@@ -109,9 +122,31 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
         {openTask === null ? (
           <>
             <header className="flex items-baseline justify-between gap-2">
-              <h1 className="text-base font-semibold tracking-tight text-[var(--text-primary)]">
-                {t('tasks:inbox.title')}
-              </h1>
+              {/*
+                * Two views, as tabs rather than a menu: there are only two, and one
+                * of them is the state the app menu's 今日 item sets (M02 S8).
+                */}
+              <nav
+                className="flex items-baseline gap-3"
+                aria-label={t('tasks:view.switch')}
+                data-field="view-tabs"
+                data-view={view}
+              >
+                <ViewTab
+                  field="view-inbox"
+                  active={view === 'inbox'}
+                  onClick={() => void setView('inbox')}
+                >
+                  {t('tasks:inbox.title')}
+                </ViewTab>
+                <ViewTab
+                  field="view-today"
+                  active={view === 'today'}
+                  onClick={() => void setView('today')}
+                >
+                  {t('tasks:view.today')}
+                </ViewTab>
+              </nav>
               <span className="text-xs text-[var(--text-muted)]">
                 {t('tasks:summary.pending', { count: tasks.length })}
               </span>
@@ -149,5 +184,38 @@ function isTextField(target: EventTarget | null): boolean {
     target instanceof HTMLInputElement ||
     target instanceof HTMLTextAreaElement ||
     target.isContentEditable
+  );
+}
+
+/**
+ * One view in the panel's header (M02 S8). A button, not a link: it changes what is
+ * already on screen and goes nowhere. The active one carries the emphasis the old
+ * heading used to, so the panel keeps a single strong line at its top.
+ */
+function ViewTab({
+  field,
+  active,
+  onClick,
+  children,
+}: {
+  field: string;
+  active: boolean;
+  onClick: () => void;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <button
+      type="button"
+      data-field={field}
+      aria-current={active ? 'page' : undefined}
+      onClick={onClick}
+      className={
+        active
+          ? 'text-base font-semibold tracking-tight text-[var(--text-primary)]'
+          : 'text-base font-medium tracking-tight text-[var(--text-muted)] hover:text-[var(--text-primary)]'
+      }
+    >
+      {children}
+    </button>
   );
 }

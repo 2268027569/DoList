@@ -21,6 +21,7 @@ import { createLogger } from '../logger';
 import { initI18n } from '../i18n';
 import { readRawSetting } from '../db/repositories/settings';
 import { refreshTray } from '../platform/tray';
+import { popupAppMenu } from '../platform/app-menu';
 import { smokeRecord } from '../platform/smoke';
 import { appSettings, updateAppSettings, writeMarkerAnchor } from '../services/settings';
 import { broadcastLocale, broadcastTheme } from '../services/broadcast';
@@ -31,6 +32,7 @@ import {
   applyMarkerAnchor,
   applyMarkerAppearance,
   endMarkerDrag,
+  getMarkerWindow,
   noteDragSignal,
   startMarkerDrag,
   syncEdgeHideWatch,
@@ -103,6 +105,13 @@ export function registerIpcHandlers(): void {
     writeMarkerAnchor(parsed.data);
     applyMarkerAnchor(parsed.data);
     return ok(parsed.data);
+  });
+
+  // Right-click on the marker: the app menu, anchored to the window that was clicked
+  // (platform/app-menu.ts). The list itself is shared with the tray icon's menu.
+  handle(IPC.marker.contextMenu, () => {
+    popupAppMenu(getMarkerWindow());
+    return ok(null);
   });
 
   handle(IPC.settings.get, (payload) => {

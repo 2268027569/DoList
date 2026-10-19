@@ -68,8 +68,14 @@ function main(): void {
   element.addEventListener('pointerleave', () => report(smoke, 'pointer-leave'));
   element.addEventListener('pointerdown', () => report(smoke, 'pointer-down'));
   element.addEventListener('contextmenu', (event) => {
-    // Right-click menu arrives with M01; for now the default menu stays hidden.
+    // The app menu (新建任务 / 今日 / 退出) is asked for, never built here: its
+    // labels come from the main i18n instance and its actions open windows or quit
+    // the app, which a renderer may not do (§6.5). The default browser menu — which
+    // would offer "Reload" on a window that must never accidentally reload — stays
+    // suppressed.
     event.preventDefault();
+    report(smoke, 'context-menu');
+    void window.api.marker.contextMenu();
   });
 
   window.api.on.markerState((state) => {

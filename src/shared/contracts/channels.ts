@@ -4,6 +4,7 @@ import type {
   MarkerEdge,
   MarkerRisk,
   PanelState,
+  PanelView,
 } from '../types/app';
 
 /** Channel names follow `<domain>:<action>`; events use the `event:` prefix (§6.1). */
@@ -39,6 +40,13 @@ export const IPC = {
     dragEnd: 'marker:drag-end',
     /** Renderer -> main: persist a new anchor immediately. */
     setAnchor: 'marker:set-anchor',
+    /**
+     * Renderer -> main: the marker was right-clicked, so open the app menu
+     * (docs/FEATURES.md M01 「标记 / 托盘菜单」). The menu is built and owned by the
+     * main process — its labels come from the main i18n instance and its actions
+     * move windows or quit the app, none of which a renderer may do (§6.5).
+     */
+    contextMenu: 'marker:context-menu',
   },
   settings: {
     get: 'settings:get',
@@ -106,6 +114,12 @@ export const IPC = {
      * (M02-PLAN §6).
      */
     quickAddFocus: 'event:quick-add-focus',
+    /**
+     * Main -> panel: show this view. Sent when the app menu's 今日 item opens the
+     * panel; the panel owns the view state, so this is a request rather than a
+     * command, and switching it by hand is the same state (M02 S8).
+     */
+    panelView: 'event:panel-view',
   },
 } as const;
 
@@ -118,6 +132,11 @@ export interface PanelStatePayload {
 export interface MarkerAnchorPayload {
   anchor: MarkerAnchor;
   edge: MarkerEdge;
+}
+
+/** Which view the panel should show (M02 S8). */
+export interface PanelViewPayload {
+  view: PanelView;
 }
 
 /**

@@ -139,6 +139,20 @@ export function expandPanelForQuickAdd(): PanelState {
   return state;
 }
 
+/**
+ * The app menu's 今日 item (M02 S8): open the panel and ask it to show what is due
+ * by the end of today.
+ *
+ * The view lives in the panel renderer, so this is a request rather than a query
+ * the main process runs — and the panel switching it by hand and the menu asking
+ * for it are the same state, which is why nothing about "who asked" is stored.
+ */
+export function expandPanelForToday(): PanelState {
+  const state = expandPanel();
+  sendToPanel(IPC.event.panelView, { view: 'today' });
+  return state;
+}
+
 export function collapsePanel(): void {
   const window = panelWindow;
   if (window === null || window.isDestroyed() || !window.isVisible()) {

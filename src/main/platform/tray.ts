@@ -1,10 +1,11 @@
-import { app, Menu, Tray, nativeImage } from 'electron';
+import { Tray, nativeImage } from 'electron';
 import type { NativeImage } from 'electron';
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { createLogger } from '../logger';
 import { t } from '../i18n';
+import { buildAppMenu } from './app-menu';
 import { resourcesDir } from './paths';
 import { expandPanel, panelStateOf, togglePanel } from '../windows/panel';
 
@@ -42,13 +43,9 @@ export function destroyTray(): void {
 }
 
 function applyTrayMenu(instance: Tray): void {
-  instance.setContextMenu(
-    Menu.buildFromTemplate([
-      { label: t('action.openPanel'), click: () => expandPanel() },
-      { type: 'separator' },
-      { label: t('action.quit'), click: () => app.quit() },
-    ]),
-  );
+  // The same list the marker's right-click opens (platform/app-menu.ts): one menu,
+  // two entry points.
+  instance.setContextMenu(buildAppMenu());
 }
 
 /**

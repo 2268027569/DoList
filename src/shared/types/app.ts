@@ -55,6 +55,13 @@ export interface MarkerAnchor {
 
 export type PanelState = 'hidden' | 'expanding' | 'shown' | 'collapsing';
 
+/**
+ * Which slice of the tasks the panel lists (docs/M02-PLAN.md §8, slice S8). Two
+ * views: the Inbox, and everything due by the end of today. A view with its own
+ * identity — a list, a tag, a saved search — is M03.
+ */
+export type PanelView = 'inbox' | 'today';
+
 /** Resolved boot parameters handed to both renderers (docs/ARCHITECTURE.md §7). */
 export interface BootParams {
   mode: ThemeMode;

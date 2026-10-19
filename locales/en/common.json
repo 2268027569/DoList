@@ -1,6 +1,7 @@
 {
   "app.name": "YiChen ToDo",
-  "action.openPanel": "Open panel",
+  "action.newTask": "New task",
+  "action.today": "Today",
   "action.quit": "Quit",
   "marker.tooltip": "Click to open · drag to move"
 }

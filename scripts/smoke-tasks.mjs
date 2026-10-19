@@ -21,8 +21,12 @@
  *      and
  *  11. ticking the repeating task off mints its next occurrence, which the list then
  *      draws in the place the completed row had occupied (slice S6),
- *  12. two rows are multi-selected and one bulk command sets them both (slice S7), and
- *  13. a single `Ctrl+Z` takes that whole command back (slice S7).
+ *  12. two rows are multi-selected and one bulk command sets them both (slice S7),
+ *  13. a single `Ctrl+Z` takes that whole command back (slice S7),
+ *  14. switching to the 今日 tab filters the same list rather than copying it, and a
+ *      task added there is stored due today (slice S8), and
+ *  15. switching back to the Inbox shows it again, next to the rows that are not due
+ *      today (slice S8).
  *
  * Only two things come from the OS: the global shortcut, which a registered hotkey
  * only ever sees when the input queue produced it, and the app's own launch. Every
@@ -63,6 +67,8 @@ const FIRST_TASK = 'Buy milk';
 const SECOND_TASK = 'Call the vet';
 /** The checklist item added to the first task, and the day the repeat rolls onto. */
 const SUBTASK = 'Take the big bag';
+/** Added while the 今日 view is showing, so it is due today by the view's own rule. */
+const TODAY_TASK = 'Call the plumber';
 
 const results = [];
 
@@ -1212,6 +1218,75 @@ async function main() {
     } else {
       fail(
         `after Ctrl+Z the Inbox reads ${JSON.stringify(restoredRows.map((row) => row.priority))}, expected the ${JSON.stringify(prioritiesBefore)} they had before the command`,
+      );
+    }
+
+    // --- phase 9: 今日 is a filter, not a second copy of the list (slice S8) ---
+    // The tabs set the same state the app menu's 今日 item asks for over
+    // `event:panel-view`, so driving the tab covers the view itself; the right-click
+    // and the menu are the marker harness's phase 5.
+    await gotoField(cdp, 'view-today');
+    const todaySince = Date.now();
+    await pressKey(cdp, 'Enter');
+    const todayRender = await waitForEvent('tasks-rendered', 5_000, todaySince);
+    if (todayRender?.detail?.view === 'today' && todayRender?.detail?.count === 0) {
+      pass('今日 drew nothing — neither row is due by the end of today', todayRender.detail);
+    } else {
+      fail(
+        `今日 drew ${JSON.stringify(todayRender?.detail ?? null)}, expected the "today" view with no rows`,
+      );
+    }
+
+    // What is added while 今日 is showing is due today: the view *is* the filter, so a
+    // task with no due date would be stored and then not drawn — the opposite of what
+    // adding to 今日 means. The Inbox leaves the date alone, which is why this is a
+    // rule of the view rather than of the field.
+    await gotoField(cdp, 'quick-add');
+    const beforeTodayAdd = Date.now();
+    const addedToday = await typeTask(cdp, TODAY_TASK);
+    const todayRow = readTasks().find((row) => row.title === TODAY_TASK);
+    if (todayRow?.dueAt === dayStart(0) && todayRow?.dueHasTime === 0) {
+      pass('a task added in 今日 is due today, as a day rather than an instant', {
+        dueAt: todayRow.dueAt,
+        expected: dayStart(0),
+      });
+    } else {
+      fail(
+        `the task added in 今日 reads dueAt ${JSON.stringify(todayRow?.dueAt ?? null)}, expected ` +
+          `${dayStart(0)} with dueHasTime 0`,
+      );
+    }
+    if (addedToday === null) return;
+
+    const todayAfterAdd = await waitForEvent('tasks-rendered', 5_000, beforeTodayAdd);
+    if (
+      todayAfterAdd?.detail?.view === 'today' &&
+      todayAfterAdd?.detail?.count === 1 &&
+      todayAfterAdd?.detail?.titles?.[0] === TODAY_TASK
+    ) {
+      pass('今日 drew the row that fell inside it', todayAfterAdd.detail.titles);
+    } else {
+      fail(
+        `今日 drew ${JSON.stringify(todayAfterAdd?.detail ?? null)}, expected the one due-today row`,
+      );
+    }
+
+    // And back in the Inbox the same row is still there, alongside the two that are
+    // not due today: the views differ by their filter alone, and no row was copied.
+    await gotoField(cdp, 'view-inbox');
+    const inboxSince = Date.now();
+    await pressKey(cdp, 'Enter');
+    const inboxRender = await waitForEvent('tasks-rendered', 5_000, inboxSince);
+    if (
+      inboxRender?.detail?.view === 'inbox' &&
+      inboxRender?.detail?.count === 3 &&
+      inboxRender?.detail?.titles?.includes(TODAY_TASK)
+    ) {
+      pass('the Inbox holds the same row plus the two that are not due today', inboxRender.detail.titles);
+    } else {
+      fail(
+        `the Inbox drew ${JSON.stringify(inboxRender?.detail ?? null)}, expected three rows ` +
+          `including ${TODAY_TASK}`,
       );
     }
   } finally {

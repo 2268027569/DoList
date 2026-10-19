@@ -9,9 +9,10 @@
  *
  * It launches the built app with `YICHEN_SMOKE=1`, drives the real cursor with
  * PowerShell (`mouse_event`), and checks what the renderers reported. Phases run
- * in this order: boot state → edge auto-hide → drag → click → panel geometry.
- * Auto-hide goes before the drag because it needs the edge anchor the marker has
- * at boot, and the drag is what gives it up (§9.4).
+ * in this order: boot state → edge auto-hide → drag → click → panel geometry →
+ * right-click / app menu (M02 S8). Auto-hide goes before the drag because it
+ * needs the edge anchor the marker has at boot, and the drag is what gives it up
+ * (§9.4).
  *
  * Usage:
  *   npm run build
@@ -153,7 +154,7 @@ function displayScaleFor(bounds) {
  * when someone else moves the mouse mid-run the scripted path is not the real
  * one, and the caller must know that before blaming the application.
  */
-function driveCursor({ bounds, display, click, drag }) {
+function driveCursor({ bounds, display, click, rightClick, drag }) {
   const scale = display?.scaleFactor ?? 1;
   const origin = display?.bounds ?? { x: 0, y: 0 };
   // Electron works in DIPs; the OS cursor works in physical pixels.
@@ -176,6 +177,7 @@ function driveCursor({ bounds, display, click, drag }) {
     String(physicalY),
   ];
   if (click) scriptArgs.push('-Click');
+  if (rightClick) scriptArgs.push('-RightClick');
   if (dragPhysical !== null) {
     scriptArgs.push(
       '-Drag',
@@ -304,6 +306,7 @@ param(
   [int]$DragDy = 0,
   [int]$Steps = 12,
   [switch]$Click,
+  [switch]$RightClick,
   [switch]$Drag
 )
 
@@ -315,8 +318,12 @@ public static class YichenMouse {
   [DllImport("user32.dll")] private static extern void mouse_event(uint flags, uint dx, uint dy, uint data, IntPtr extra);
   private const uint LEFTDOWN = 0x0002;
   private const uint LEFTUP = 0x0004;
+  private const uint RIGHTDOWN = 0x0008;
+  private const uint RIGHTUP = 0x0010;
   public static void Press() { mouse_event(LEFTDOWN, 0, 0, 0, IntPtr.Zero); }
   public static void Release() { mouse_event(LEFTUP, 0, 0, 0, IntPtr.Zero); }
+  public static void RightPress() { mouse_event(RIGHTDOWN, 0, 0, 0, IntPtr.Zero); }
+  public static void RightRelease() { mouse_event(RIGHTUP, 0, 0, 0, IntPtr.Zero); }
 }
 '@
 
@@ -329,6 +336,12 @@ if ($Click) {
   [YichenMouse]::Press()
   Start-Sleep -Milliseconds 60
   [YichenMouse]::Release()
+}
+
+if ($RightClick) {
+  [YichenMouse]::RightPress()
+  Start-Sleep -Milliseconds 60
+  [YichenMouse]::RightRelease()
 }
 
 if ($Drag) {
@@ -455,6 +468,18 @@ async function runClick(bounds, display, attempts = 3) {
   return null;
 }
 
+/**
+ * Right-clicks the marker. No retry loop like `runClick`: that one exists because a
+ * click has to land on the dot and expand the panel, whereas this only has to reach
+ * the renderer, which reports the attempt either way.
+ */
+async function runRightClick(bounds, display) {
+  const since = Date.now();
+  const drive = driveCursor({ bounds, display, rightClick: true });
+  const context = await waitForEvent('context-menu', 3_000, since);
+  return { context, drive };
+}
+
 async function main() {
   if (process.platform !== 'win32') {
     console.error('[smoke] this harness drives the Windows cursor and only runs on Windows.');
@@ -488,6 +513,11 @@ async function main() {
       // Its own database, inside the directory wiped above: the run starts from
       // an empty schema every time and never touches the real user data.
       YICHEN_SMOKE_DB: join(smokeDir, 'smoke.db'),
+      // The app menu is only ever a popup, and a popup cannot be clicked by a
+      // script (platform/app-menu.ts). This makes the run skip the popup and
+      // *run* that item instead, so what the harness asserts is the action, not
+      // Electron's own menu widget — which is the only thing left unexercised.
+      YICHEN_SMOKE_MENU_PICK: '0',
       ...(focusable ? { YICHEN_SMOKE_FOCUSABLE: '1' } : {}),
     },
     stdio: ['ignore', 'inherit', 'inherit'],
@@ -744,6 +774,73 @@ async function main() {
             `panel is not beside the marker: gap ${gapX} DIP, marker ${JSON.stringify(markerAt)}`,
           );
         }
+      }
+    }
+
+    // --- phase 5: right-click opens the app menu (M02 S8) -------------------
+    // The app menu (新建任务 / 今日 / 退出) is asked for by the marker, never built
+    // by it: the labels come from the main process's i18n instance and the actions
+    // move windows or quit the app (§6.5). So the right-click is driven for real,
+    // and what comes back is asserted end to end — renderer → channel → the main
+    // process's list → the chosen action actually running.
+    //
+    // `YICHEN_SMOKE_MENU_PICK=0` (set at launch) makes it run 新建任务 instead of
+    // popping up. The marker's click and this action both end in `expandPanel`, so
+    // the fresh `panel-expanded` after the right-click is the proof that the menu
+    // item ran rather than merely being read out.
+    const menuTarget = drag?.dragEnd?.detail?.bounds ?? markerBounds();
+    if (menuTarget === null) {
+      fail('the marker position is unknown, so the right-click could not be aimed');
+    } else {
+      const right = await runRightClick(menuTarget, display);
+
+      if (right.context === null) {
+        fail('the right-click never reached the marker renderer');
+      } else {
+        pass('right-click reached the marker renderer');
+      }
+
+      const menu = await waitForEvent('app-menu', 3_000, right.context?.at ?? Date.now());
+      const labels = menu?.detail?.labels ?? null;
+
+      if (menu === null || labels === null) {
+        fail('the marker renderer never asked the main process for the app menu');
+      } else {
+        const resolved = labels.every((label) => label.trim() !== '' && !label.includes('.'));
+        if (labels.length === 3 && resolved) {
+          pass('the main process answered with its three-item menu, labelled from i18n', {
+            labels,
+          });
+        } else {
+          fail(
+            `the app menu came back as ${JSON.stringify(labels)}, expected three labels ` +
+              `resolved from i18n (not raw keys)`,
+          );
+        }
+      }
+
+      const picked = await waitForEvent('app-menu-picked', 3_000, right.context?.at ?? Date.now());
+      if (picked === null) {
+        fail('no menu item was chosen');
+      } else if (picked.detail?.index !== 0 || picked.detail?.label !== labels?.[0]) {
+        fail(
+          `the chosen item was ${JSON.stringify(picked.detail)}, expected index 0 ` +
+            `(${JSON.stringify(labels?.[0])})`,
+        );
+      } else {
+        pass('the requested menu item was found and run', picked.detail);
+      }
+
+      // 新建任务 opens the panel and hands the caret to quick-add — the same path
+      // the marker's own click takes, so a panel that reactivates here is the
+      // action having run, not the menu having been drawn.
+      const reopened = await waitForEvent('panel-expanded', 5_000, right.context?.at ?? Date.now());
+      if (reopened === null) {
+        fail('the menu item ran but the panel did not open');
+      } else {
+        pass('the menu item opened the panel through the same path the marker click uses', {
+          panelBounds: reopened.detail?.panelBounds,
+        });
       }
     }
   } finally {

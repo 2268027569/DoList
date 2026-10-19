@@ -6,6 +6,7 @@ import type {
   MarkerAnchorPayload,
   MarkerStatePayload,
   PanelStatePayload,
+  PanelViewPayload,
 } from '@shared/contracts/channels';
 import type {
   TaskBulkInput,
@@ -44,6 +45,12 @@ const api = {
     dragTick: () => invoke<null>(IPC.marker.dragTick),
     dragEnd: () => invoke<MarkerAnchor | null>(IPC.marker.dragEnd),
     setAnchor: (anchor: MarkerAnchor) => invoke<MarkerAnchor>(IPC.marker.setAnchor, anchor),
+    /**
+     * Opens the app menu on the main side (right-click). The renderer sends the
+     * request and nothing else: the menu's labels and its actions both live in the
+     * main process (§6.5, M02 S8).
+     */
+    contextMenu: () => invoke<null>(IPC.marker.contextMenu),
   },
   settings: {
     get: (key: string) => invoke<AppSettings | string | number | null>(IPC.settings.get, { key }),
@@ -116,6 +123,9 @@ const api = {
       subscribe(IPC.event.taskChanged, listener),
     /** The quick-add shortcut opened the panel: take the caret in its field. */
     quickAddFocus: (listener: () => void) => subscribe(IPC.event.quickAddFocus, listener),
+    /** The app menu asked for a view; the panel owns that state (M02 S8). */
+    panelView: (listener: (payload: PanelViewPayload) => void) =>
+      subscribe(IPC.event.panelView, listener),
   },
 } as const;
 

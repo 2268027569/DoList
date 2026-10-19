@@ -7,7 +7,7 @@
 > verified.
 
 - **状态**：已确认（2026-10-19）——D2 用 `rrule` 库、D6 全屏替换式、S7/S8 本轮一并做完
-- **进度**：S0 ✅ 测试地基 → S1 ✅ 数据层 → S2 ✅ IPC → S3 ✅ 列表与快速新增 → S4 ✅ 详情与字段编辑 → S5 ✅ 排序与拖拽 → S6 ✅ 子任务与重复 → **S7 ✅ 撤销 / 批量 / 附件（2026-10-19）** → 下一片 S8（可选，M01 收尾：右键菜单）
+- **进度**：S0 ✅ 测试地基 → S1 ✅ 数据层 → S2 ✅ IPC → S3 ✅ 列表与快速新增 → S4 ✅ 详情与字段编辑 → S5 ✅ 排序与拖拽 → S6 ✅ 子任务与重复 → S7 ✅ 撤销 / 批量 / 附件 → **S8 ✅ 应用菜单与今日视图（2026-10-20，M02 收尾片）**
   - S1 落地：迁移 `0002_task_fields.sql`（加 `remind_lead_min`）、`shared/types/task.ts`、`shared/utils/id.ts`（UUID v7）、`shared/utils/task-query.ts`（过滤 → SQL + 排序白名单）、`repositories/tasks.ts`（增删改查 / 软删级联 / 恢复 / 重排）、`repositories/tags.ts`、`repositories/attachments.ts`；不变量见 ARCHITECTURE §5.1，真库用例 30 例
   - S2 落地：`shared/contracts/task.ts`（zod 契约）、`channels.ts` 的 6 条任务通道 + `event:task-changed`、`main/services/tasks.ts`（域服务，不 import electron）、`main/services/task-events.ts`（`notifyTasksChanged` 单一通知点）、`main/ipc/handlers/task.ts`（按列表注册）、`ipc/validate.ts`（共用 `invalid()`）、preload 白名单 `api.task.*` / `api.on.taskChanged`；契约 20 例 + 服务层真库 15 例
   - S3 落地：`shared/utils/task-due-label.ts`（截止 chip 纯逻辑，9 例单测）、`shared/i18n/format.ts` 补 `formatDayOffset`、`event:quick-add-focus` 通道 + preload 订阅 + 主进程 `expandPanelForQuickAdd()`、全局快捷键 `Ctrl+Shift+N`、面板 `store.ts` 任务分片 + `quick-add.tsx` / `task-row.tsx` / `task-list.tsx`（App.tsx 由 M0 演示壳改为收件箱）、中英双语 `tasks.json` 新键、`scripts/smoke-tasks.mjs`（12 项断言）
@@ -27,6 +27,9 @@
   - S7 落地：`main/services/undo.ts`（内存逆操作栈：条目是"要放回的行"的快照列表而非逆操作、上限 30、`popUndo` 消费不压回、重启即失效）、`services/tasks.ts` 的 `bulkTasks` / `undoLastWrite` 与单写入路径统一 `pushUndo`、仓储层 `softDelete` / `restore` / `reorderTasks` 改为返回 `{ affected, tombstoned|restored|moved }`（快照语义：删除快照 `deleted_at === null`、恢复快照带 tombstone 时间戳、`moved` 只含真正移动的行）、`repositories/tasks.ts` 新增 `restoreTask`（按快照整行回写）、`services/attachments.ts`（只存路径引用：`name` / `size` 由主进程现读 `statSync`）、`contracts/task.ts` 的 `taskBulkInput`（判别联合）+ 附件四通道、`channels.ts` 加 `task:bulk` / `task:undo` / `IPC.attachment`、`ipc/handlers/attachment.ts`（`dialog` 选择器与 `shell.openPath` 只在 IPC 层）、preload `task.bulk` / `task.undo` / `attachment.*`、面板 `store.ts` 的选中集 / `bulk` / `undo` / 附件分片、`task-row.tsx` 选择框、`task-list.tsx` 批量条、`task-detail.tsx` 附件区、App 层 `Ctrl+Z`、中英 `tasks.json` 新键、`smoke-tasks.mjs` phase 7/8
   - S7 的三处判断：① 撤销栈存的是**要放回的行**（快照）而不是逆操作——一次批量命令、一次勾选生成下一次，都是"多个行一起变"，逆操作要么写成一堆分支、要么会漏掉新生成的行，快照列表让"撤销创建 = 软删该行、撤销其它 = 按快照回写"各归一条路径；`undoLastWrite` 消费式弹出而不压回，否则连按 `Ctrl+Z` 会撤销自己的撤销、栈永不空。② 批量契约**只留三条命令**（`complete` / `priority` / `delete`），刻意不做文本类字段（改日期 / 加标签 / 移清单）——一条会覆盖整批同一值的文本命令既难以撤销回各自的原值，也不符合"一个操作条只有几个按钮"的形态；`delete` 与单行走**同一软删级联**路径，不另开一条。③ 附件**只存引用**（路径），不复制文件：`name` / `size` 由主进程 `statSync` 现读（文件被删/改名时列仍在、`size` 为 `null`），OS 文件选择器与 `shell.openPath` 只住在 IPC handler 里——服务层因此不 import electron、可单测，渲染层永远不发路径、只能点按钮让主进程弹选择器
   - S7 的两处收窄：**批量只做三条命令**（见上）；**附件区只在详情里**（不做附件列表视图、不做拖拽入框）——够 P1 的"引用一个本地文件"，更重的附件管理留给后续里程碑
+  - S8 落地：`main/platform/app-menu.ts`（应用菜单：`buildAppMenu()` 由托盘与标记右键共用、`popupAppMenu()` 锚定标记窗口弹出、`smokeMenuPick()` 在冒烟态改为直接执行第 n 项）、`platform/tray.ts` 改为挂这份共用菜单、`channels.ts` 加 `marker:context-menu` 与 `event:panel-view`（附 `PanelViewPayload`）、`types/app.ts` 加 `PanelView = 'inbox' | 'today'`、`windows/panel.ts` 加 `expandPanelForToday()`、`ipc/register.ts` 注册 `marker.contextMenu`、preload 加 `marker.contextMenu()` 与 `on.panelView()`、标记渲染层 `contextmenu` → 发 IPC（并在冒烟态上报 `context-menu`）、面板 `store.ts` 加 `view` + `filterFor(view)`（今日 = `dueTo: localDayBounds(now).end`）+ `setView()` + `addTask` 在今日态写入当天零点、`App.tsx` 头部改为两个视图 tab（`view-inbox` / `view-today`）+ 订阅 `panel:view`、`task-list.tsx` 上报 `tasks-rendered` 带上 `view` 且空态分收件箱/今日、中英 `common.json` 改 `action.newTask` / `action.today`（去 `action.openPanel`）与 `tasks.json` 加 `view.*` / `today.empty`、`smoke-marker-input.mjs` 新增 `-RightClick` 驱动与 phase 5、`smoke-tasks.mjs` 新增 phase 9
+  - S8 的三处判断：① 菜单**只有一处定义**（`app-menu.ts`），标记右键与托盘各调一次——两份菜单迟早会漂移，而"托盘上没有、标记上有"这种差异用户只会读成 bug；② 菜单文案与动作**全在主进程**：文案来自主进程 i18n 实例，动作是开窗口 / 退出，渲染层只发一次"我被右键了"（§6.5），菜单因此不是 renderer 能伪造的东西；③ 今日不做成"另一份列表"而是**同一个列表换过滤条件**——数据层只读一次、面板只存一个 `view`，菜单那项与 tab 落在同一个字段上，所以"菜单点的今日"和"手点 tab"不可能是两种状态
+  - S8 的两处收窄：**菜单只上三项**（新建任务 / 今天 / 退出）——`打开设置` 属 M10、`暂停提醒` 属 M04，点了没反应的空项比短菜单更糟，等有真实落点再进菜单；**今日视图不带"逾期"分组**——`dueTo` 的半开区间已把逾期含进去，按组分开画属于 M03 的视图工作
 - **范围**：[FEATURES.md](FEATURES.md) 的 M02（**不含**自然语言解析，属 P1 且依赖 M06 的语种词表）
 - **前置**：M01 已完成（标记窗口、拖拽、吸附、贴边隐藏、面板形态、状态推送）
 - **约定**：中文文档；英文提交信息与代码注释；每个切片独立提交、独立验证
@@ -46,6 +49,7 @@ M02 是「看得见的功能」的第一个模块：**数据模型 + 读写通�
 | 重复任务（RRULE 预设 + 自定义，两种模式） | 富文本粘贴拆任务、粘贴 URL 抓标题（P2，需联网） |
 | 快速新增、详情面板、拖拽排序（组内 **S5**；跨清单等 M03） | 附件管理界面（**S7 只做详情里的引用式附件**：存路径、不算复制文件） |
 | 撤销（Ctrl+Z） | 回收站的独立界面（M03 的归档视图承载） |
+| 应用菜单（**S8**，标记右键与托盘共用：新建任务 / 今天 / 退出）与面板的「今天」视图 | 菜单里的「打开设置」「暂停提醒」——分别属 M10 / M04，等有真实落点再进菜单 |
 
 ---
 
@@ -135,6 +139,8 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 | `attachment:list` / `:add` / `:remove` / `:open` | `{ taskId }` / `{ taskId }`（add 不带路径） / `{ id }` / `{ id }` | 主进程用 `dialog` 与 `shell.openPath`，渲染层不碰 `fs`；`add` 选择器取消即回空数组 |
 | `event:task-changed` | `{ kind, ids[], scope? }` | 单向广播，渲染层据此重取（D4） |
 | `event:quick-add-focus` | — | 全局快捷键展开面板后聚焦输入框（S3 落地时定名，只发给面板窗口） |
+| `marker:context-menu` | — | **S8**：标记被右键，请主进程开应用菜单（菜单的文案与动作都在主进程，见 §6.5） |
+| `event:panel-view` | `{ view: 'inbox' \| 'today' }` | **S8**：菜单的「今天」请面板切视图；视图状态属渲染层，所以这是请求不是查询 |
 
 - 每个 handler 第一行 `schema.safeParse`，失败返回 `VALIDATION_FAILED`（沿用现有注册器模型）
 - `register.ts` 只保留注册骨架，任务域拆到 `ipc/handlers/task.ts`，与 §2 的目录规划一致
@@ -152,7 +158,8 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 | 排序 | 列表内拖拽（**S5 已交付**，用 M01 验证过的 pointer 方案而非 HTML5 `draggable`）+ 键盘替代 `Alt+↑/↓`（无鼠标可用，也让自动化可测）；跨清单拖拽等 M03 有清单视图后补 | FEATURES M02 P0 |
 | 批量 | **S7 已交付**：行首选择框（悬停/聚焦才显形）→ 列表上方浮出操作条（完成 / 提升到高优先级 / 删除 / 取消选择），命令成功即清空选择、操作条随之消失；操作条只做三条命令（见 S7 判断②） | P1 |
 | 撤销 | **S7 已交付**`Ctrl+Z`（列表与详情都生效，文本输入框内保留浏览器自身的撤销；空栈无动作）；**未做**回收站条样式 toast——没有"删除后可撤销"的提示条，撤销靠快捷键与文档 | P1 |
-| 状态 | 新增 `store.ts` 的任务分片：查询结果 + 选中集 + 详情目标；**不缓存派生数据**，重取即刷新 | D4 |
+| 视图 | **S8 已交付**：头部两个 tab「收件箱 / 今天」（`view-inbox` / `view-today`），切换即换过滤条件并重取，行不复制；`今天` = `dueTo: localDayBounds(now).end`（半开区间，逾期也含在内），无截止日期的任务留在收件箱；**在「今天」里新增的任务按当天零点落库**（视图就是过滤器，否则新增后立刻看不见）；菜单的「今天」项与 tab 落在同一个字段上 |
+| 状态 | 新增 `store.ts` 的任务分片：查询结果 + 选中集 + `view` + 详情目标；**不缓存派生数据**，重取即刷新 | D4 |
 
 样式一律走既有三层令牌（`--bg-*` / `--text-*` / `--accent` / `--status-*`），`check-tokens.mjs` 已在 CI 拦硬编码色值。
 
@@ -185,9 +192,9 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 | **S5 排序与拖拽 ✅** | 组内 DnD（pointer）+ `Alt+↑/↓`；跨清单推迟到 M03 | 冒烟：`Alt+↓` → 断言列表重画成新顺序且焦点仍在被移动的行 → `Alt+↑` 复位 → 抓抓手拖到下一行下方 → 断言落库顺序；重启后顺序不变（`sort_order` 子集重排 + 焦点保持 + 合成拖拽共 29/29 实测通过） |
 | **S6 子任务与重复 ✅** | 一层子任务 + `n/m`；重复预设 + 自定义；完成后生成下一次到期 | RRULE 单测（12 例）+ 服务层真库用例（勾选生成下一次、`after_completion` 重锚、`COUNT` 用尽不生成、新实例无子任务）；冒烟：在详情里录一条子任务（断言 `parentId` 指向父行且光标留在输入框）→ 点「每天」断言库里存上 `FREQ=DAILY` → `Esc` 后从 DOM 读父行的 `0/1` chip → **重启后**打开这条重复任务勾选完成 → 断言一次写入报出两行、顶层从 2 行变 3 行、新行是 `todo` / `FREQ=DAILY` / 到期为后天本地零点 / 无子任务 → `Esc` 后断言列表把新实例画在已完成那行的位置上（`Esc` 之后才读列表：详情打开时屏幕上就没有列表） |
 | **S7 撤销 / 批量 / 附件 ✅** | 内存逆操作栈（快照语义）+ 批量三条命令（一次写入/通知/撤销条目）+ 附件只存引用 | 撤销栈单测 13 例（含整批一条、勾选生成行、不自我撤销）+ 附件单测 5 例；冒烟 phase 7/8：勾选两条行 → 断言批量条 `data-count="2"` → 批量「高优先级」→ 断言一条 `updated` 报出两个 id、收件箱两行 `priority=3`、批量条消失 → 一次 `Ctrl+Z` → 断言一条 `undone` 报出两个 id、两行优先级回到命令前的值（`smoke:tasks` 48/48、`smoke:marker` 14/14 实测通过） |
-| **S8（可选，M01 收尾）** | 右键菜单（快速新增 / 今天 / 设置 / 暂停提醒 / 退出）——S3 之后「快速新增」已有落点 | 冒烟：右键 → 断言菜单与首项行为 |
+| **S8 ✅（M01 收尾 / M02 收尾）** | 应用菜单（新建任务 / 今天 / 退出）——标记右键与托盘共用同一份；面板加第二个视图「今天」 | 冒烟：marker 右键 → 断言菜单三项（文案来自主进程 i18n、非裸键）、选中项下标与文案、该动作真的把面板走了同一条展开路径（18/18）；tasks 用视图 tab 覆盖视图本身（切到「今天」为空 → 在其中新增即到期今天 → 切回收件箱三行含该行，52/52） |
 
-S0–S7 已全部过门，主干可交付「能记事、能改、能排序、能拆清单、能重复、能撤销与批量」——M02 的 P0 与 P1 均已落地；S8 按拍板范围一并做。
+S0–S8 已全部过门，主干可交付「能记事、能改、能排序、能拆清单、能重复、能撤销与批量、能从托盘/标记取用菜单与今日视图」——M02 的 P0 与 P1 均已落地，M02 至此收尾。
 
 ---
 
@@ -202,6 +209,8 @@ S0–S7 已全部过门，主干可交付「能记事、能改、能排序、能
 - **冒烟里的拖拽是合成鼠标事件**（S5 起）：`Input.dispatchMouseEvent` 的 press/move/release 会被 Chromium 转成 pointer 事件，于是面板自己的 pointer 处理链（含 `setPointerCapture`）真的跑一遍——不需要真鼠标，也不需要前台；坐标取自页面自己的矩形，因此脚本不必知道窗口在屏幕上的位置
 - **冒烟里的列表只在自己上屏时才报**（S6 发现）：`tasks-rendered` 由列表组件上报，而详情打开时 App 画的是详情、列表根本没挂载，所以勾完任务要先 `Esc` 回列表才能读到它画了什么；同理 `readTasks()` 默认只取顶层（`parent_id IS NULL`）——`sort_order` 是**组内**序号，把父子两组合在一起按它排序会让两组互相插序，第一版就是因此在加了子任务之后读错行
 - **冒烟要按"列表画了什么"来选行，而不是按"库里有什么"**（S7 发现）：`readTasks()` 不带收件箱过滤，勾完成的任务仍在表里，于是第一版把已完成那行也当成可选行、去点一个屏幕上不存在的选择框。S7 加了 `inboxRows()`——按 `todo`/`doing` 过滤，与面板的 `INBOX_FILTER` 对齐；`Ctrl+Z` 也证实能被 DevTools 协议送进渲染进程（面板把监听挂在 `window` 上，`event.ctrlKey` 由修饰位给出）
+- **原生菜单点不动，所以断言的是"动作真的跑了"**（S8）：菜单只在弹出态存在，脚本点不到它。冒烟态下 `YICHEN_SMOKE_MENU_PICK=n` 让主进程**跳过弹出、直接执行第 n 项**，于是未覆盖的只剩 Electron 自己的菜单控件（一次调用、没有任何我们的分支），而右键 → 通道 → 主进程 i18n 文案 → 动作整条链是真的：断言三项文案非空且不是裸键（`app-menu`）、选中项的下标与文案（`app-menu-picked`）、以及该动作真的让面板走了与标记单击相同的展开路径（又一次 `panel-expanded`）。断言刻意不比对具体文案——冒烟机的语言由设置决定，比对了就是在测语言而不是测菜单
+- **右击能进 `focusable: false` 的窗口**：`contextmenu` 与 `pointerdown` 走同一条投递路径，所以标记那次单击验证过的东西，右键也印证了一遍（`-RightClick` 走 `mouse_event` 的 `RIGHTDOWN/RIGHTUP`）
 - **手动验收**（我会自己操控电脑跑一遍）：中文输入法下回车建任务、DPI 150%、约 500 条任务的滚动流畅度、多显示器上面板贴边
 - **性能取舍**：本轮**不做列表虚拟化**——先用真实数据量测一次；只有当渲染明显掉帧才引入（避免为不存在的问题写复杂代码），结论写回 §9.7 性能预算
 

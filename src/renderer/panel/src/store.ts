@@ -1,19 +1,31 @@
 import { create } from 'zustand';
 
 import type { TaskBulkOp, TaskPatchInput, TaskQueryInput } from '@shared/contracts/task';
-import type { BootParams, PanelState } from '@shared/types/app';
+import type { BootParams, PanelState, PanelView } from '@shared/types/app';
 import type { Attachment, ReorderScope, TaskListItem, TaskWithTags } from '@shared/types/task';
+import { localDayBounds } from '@shared/utils/day';
 import { moveWithin } from '@shared/utils/sort-order';
 
 /**
  * The Inbox: top-level tasks that are still open and belong to no list
- * (`list_id = NULL`, docs/ARCHITECTURE.md §5.2). The panel offers nothing else
- * yet — views with their own filters are M03.
+ * (`list_id = NULL`, docs/ARCHITECTURE.md §5.2). Lists with their own identity are
+ * M03; the panel has the Inbox and 今日 (M02 S8).
  */
 const INBOX_FILTER: TaskQueryInput = { listId: null, parentId: null, status: ['todo', 'doing'] };
 
 /** The group the list's manual order lives in, which is also what a move rewrites. */
 const INBOX_SCOPE: ReorderScope = { kind: 'top', listId: null };
+
+/** The filter one view stands for (`setView` / `refreshTasks`). */
+function filterFor(view: PanelView): TaskQueryInput {
+  if (view === 'inbox') return INBOX_FILTER;
+
+  // 今日 is "due by the end of the local day", overdue included: the repository
+  // offers a half-open window over `due_at`, and its open end is exactly that.
+  // A task with no due date is not due today, so it stays in the Inbox rather than
+  // being pulled in to make the view look fuller.
+  return { ...INBOX_FILTER, dueTo: localDayBounds(Date.now()).end };
+}
 
 /**
  * The subtasks the open detail shows. Every status, because the checklist under a
@@ -29,7 +41,15 @@ interface PanelStore {
   panelState: PanelState;
 
   /**
-   * The Inbox query result. It is re-fetched rather than patched in place: the
+   * Which slice of the tasks the list is showing (M02 S8). Two views, and the
+   * panel owns the choice: the app menu's 今日 item asks for it over
+   * `event:panel-view`, and the tabs in the header set it directly, both landing
+   * on this one field.
+   */
+  view: PanelView;
+
+  /**
+   * The view's query result. It is re-fetched rather than patched in place: the
    * main process owns the rows, and a second copy kept here would drift from it
    * (M02 D4).
    */
@@ -67,8 +87,10 @@ interface PanelStore {
   /** True after a write came back rejected, so the detail can say so. */
   saveFailed: boolean;
 
-  /** Re-runs the Inbox query. Driven by `event:task-changed`, not by the writer. */
+  /** Re-runs the current view's query. Driven by `event:task-changed`, not the writer. */
   refreshTasks: () => Promise<void>;
+  /** Shows another view and re-reads it. Re-reading is part of showing it. */
+  setView: (view: PanelView) => Promise<void>;
   /** Stores a new Inbox task; resolves to `false` when nothing was written. */
   addTask: (title: string) => Promise<boolean>;
   /** Ticks a task done, or puts it back to `todo`. */
@@ -132,6 +154,7 @@ interface PanelStore {
 export const usePanelStore = create<PanelStore>((set, get) => ({
   boot: { mode: 'light', theme: 'minimal', locale: 'en' },
   panelState: 'hidden',
+  view: 'inbox',
 
   tasks: [],
   tasksStatus: 'loading',
@@ -144,7 +167,7 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
   saveFailed: false,
 
   refreshTasks: async () => {
-    const result = await window.api.task.query(INBOX_FILTER);
+    const result = await window.api.task.query(filterFor(get().view));
     if (!result.ok) {
       set({ tasksStatus: 'error' });
       return;
@@ -160,8 +183,23 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
     });
   },
 
+  setView: async (view) => {
+    if (get().view === view) return;
+    // The rows on screen belong to the other view's filter, so they are dropped
+    // before the read rather than drawn against it: a list showing the old rows
+    // under the new view's heading is a lie for as long as the query takes.
+    set({ view, tasks: [], tasksStatus: 'loading' });
+    await get().refreshTasks();
+  },
+
   addTask: async (title) => {
-    const result = await window.api.task.create({ title });
+    // Taken into 今日, a task with no due date would be stored and then not drawn —
+    // the view is the filter, and "add to today" is what the user asked for. So the
+    // view supplies the due date, as a day rather than an instant, the same shape
+    // the detail's 今天 preset writes (S4).
+    const due = get().view === 'today' ? localDayBounds(Date.now()).start : null;
+
+    const result = await window.api.task.create({ title, dueAt: due, dueHasTime: false });
     if (!result.ok) {
       set({ tasksStatus: 'error' });
       return false;

@@ -1,6 +1,9 @@
 {
+  "view.switch": "Choose a view",
+  "view.today": "Today",
   "inbox.title": "Inbox",
   "inbox.empty": "Nothing here yet. Press Ctrl+Shift+N to add a task.",
+  "today.empty": "Nothing due today.",
   "quickAdd.placeholder": "Add a task and press Enter",
   "summary.pending": "{count, plural, =0 {Nothing left for today} one {# task left today} other {# tasks left today}}",
   "list.loadFailed": "Tasks could not be loaded. They are still on disk — reopen the panel to retry.",

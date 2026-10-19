@@ -51,6 +51,7 @@ export function TaskList(): ReactElement {
   const { t, i18n } = useTranslation('tasks');
   const tasks = usePanelStore((state) => state.tasks);
   const status = usePanelStore((state) => state.tasksStatus);
+  const view = usePanelStore((state) => state.view);
   const moveTask = usePanelStore((state) => state.moveTask);
   const selectedIds = usePanelStore((state) => state.selectedIds);
   const toggleSelected = usePanelStore((state) => state.toggleSelected);
@@ -82,6 +83,7 @@ export function TaskList(): ReactElement {
   useEffect(() => {
     if (status !== 'ready') return;
     void window.api.smoke.report('tasks-rendered', {
+      view,
       count: tasks.length,
       titles: tasks.map((task) => task.title),
       rows: tasks.map((task) => ({
@@ -94,7 +96,7 @@ export function TaskList(): ReactElement {
         progress: progressText(task.subtasks),
       })),
     });
-  }, [tasks, status, i18n.language]);
+  }, [tasks, status, view, i18n.language]);
 
   useEffect(() => {
     const id = pendingFocus.current;
@@ -175,8 +177,11 @@ export function TaskList(): ReactElement {
 
   if (tasks.length === 0) {
     return (
-      <p className="rounded-lg bg-[var(--bg-surface-muted)] px-3 py-2 text-sm text-[var(--text-muted)]">
-        {t('inbox.empty')}
+      <p
+        data-field="list-empty"
+        className="rounded-lg bg-[var(--bg-surface-muted)] px-3 py-2 text-sm text-[var(--text-muted)]"
+      >
+        {t(view === 'today' ? 'today.empty' : 'inbox.empty')}
       </p>
     );
   }
