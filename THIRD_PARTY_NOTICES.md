@@ -27,6 +27,7 @@
 | [i18next](https://github.com/i18next/i18next) / [react-i18next](https://github.com/i18next/react-i18next) | 国际化 | MIT | |
 | [Zustand](https://github.com/pmndrs/zustand) | 状态管理 | MIT | |
 | [Tailwind CSS](https://github.com/tailwindlabs/tailwindcss) | 样式工具链 | MIT | 仅构建期参与，产物为 CSS |
+| [rrule](https://github.com/jkbrzt/rrule) | 重复规则（RFC 5545）解析与展开 | BSD-3-Clause | 仅打进主进程包，面板与标记不引用 |
 | [electron-updater](https://github.com/electron-userland/electron-builder) | 自动更新 | MIT | |
 
 ## 开发与构建依赖（不随安装包分发）

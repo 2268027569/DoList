@@ -2,7 +2,7 @@ import { create } from 'zustand';
 
 import type { TaskPatchInput, TaskQueryInput } from '@shared/contracts/task';
 import type { BootParams, PanelState } from '@shared/types/app';
-import type { ReorderScope, TaskWithTags } from '@shared/types/task';
+import type { ReorderScope, TaskListItem, TaskWithTags } from '@shared/types/task';
 import { moveWithin } from '@shared/utils/sort-order';
 
 /**
@@ -15,6 +15,13 @@ const INBOX_FILTER: TaskQueryInput = { listId: null, parentId: null, status: ['t
 /** The group the list's manual order lives in, which is also what a move rewrites. */
 const INBOX_SCOPE: ReorderScope = { kind: 'top', listId: null };
 
+/**
+ * The subtasks the open detail shows. Every status, because the checklist under a
+ * parent is where its finished steps belong too — unlike the Inbox, which is a list
+ * of what is still to be done.
+ */
+const SUBTASK_FILTER: Omit<TaskQueryInput, 'parentId'> = { status: ['todo', 'doing', 'done'] };
+
 export type TasksStatus = 'loading' | 'ready' | 'error';
 
 interface PanelStore {
@@ -26,7 +33,7 @@ interface PanelStore {
    * main process owns the rows, and a second copy kept here would drift from it
    * (M02 D4).
    */
-  tasks: TaskWithTags[];
+  tasks: TaskListItem[];
   tasksStatus: TasksStatus;
 
   /**
@@ -36,6 +43,13 @@ interface PanelStore {
    */
   openTaskId: string | null;
   openTask: TaskWithTags | null;
+
+  /**
+   * The open task's own checklist (M02 S6). Read separately from the row the
+   * detail was opened on, because it is a different query — one task's children
+   * rather than the Inbox page.
+   */
+  subtasks: TaskWithTags[];
 
   /** True after a write came back rejected, so the detail can say so. */
   saveFailed: boolean;
@@ -56,12 +70,18 @@ interface PanelStore {
   openTaskDetail: (id: string) => Promise<void>;
   /** Leaves the detail and goes back to the list. */
   closeTaskDetail: () => void;
-  /** Re-reads the open row after a write announced itself. */
+  /** Re-reads the open row and its checklist after a write announced itself. */
   refreshOpenTask: () => Promise<void>;
+  /** Re-reads just the open task's checklist. */
+  refreshSubtasks: () => Promise<void>;
   /** Saves one field of the open task (M02 D9: there is no save button). */
   saveOpenTask: (patch: TaskPatchInput) => Promise<boolean>;
   /** Soft-deletes the open task and returns to the list. */
   deleteOpenTask: () => Promise<void>;
+  /** Adds a subtask to the open task and keeps the caret in the field. */
+  addSubtask: (title: string) => Promise<boolean>;
+  /** Soft-deletes a subtask of the open task. */
+  removeSubtask: (id: string) => Promise<void>;
 
   setBoot: (boot: BootParams) => void;
   setPanelState: (state: PanelState) => void;
@@ -81,6 +101,7 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
 
   openTaskId: null,
   openTask: null,
+  subtasks: [],
   saveFailed: false,
 
   refreshTasks: async () => {
@@ -133,7 +154,7 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
   },
 
   openTaskDetail: async (id) => {
-    set({ openTaskId: id, openTask: null, saveFailed: false });
+    set({ openTaskId: id, openTask: null, subtasks: [], saveFailed: false });
     const result = await window.api.task.get(id);
     if (!result.ok) {
       set({ saveFailed: true });
@@ -145,9 +166,10 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
       return;
     }
     set({ openTask: result.data });
+    await get().refreshSubtasks();
   },
 
-  closeTaskDetail: () => set({ openTaskId: null, openTask: null, saveFailed: false }),
+  closeTaskDetail: () => set({ openTaskId: null, openTask: null, subtasks: [], saveFailed: false }),
 
   refreshOpenTask: async () => {
     const id = get().openTaskId;
@@ -160,6 +182,20 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
       return;
     }
     set({ openTask: result.data });
+    // The checklist is read again too: ticking a subtask from this screen changes
+    // it, and so does anything that happened on another surface while it was open.
+    await get().refreshSubtasks();
+  },
+
+  refreshSubtasks: async () => {
+    const id = get().openTaskId;
+    if (id === null) return;
+
+    const result = await window.api.task.query({ ...SUBTASK_FILTER, parentId: id });
+    if (!result.ok) return;
+    // The query returns rows without their tags; the checklist does not draw any,
+    // and asking for them would be a second read on every subtask write.
+    set({ subtasks: result.data.map((task) => ({ ...task, tags: [] })) });
   },
 
   saveOpenTask: async (patch) => {
@@ -182,7 +218,28 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
       set({ saveFailed: true });
       return;
     }
-    set({ openTaskId: null, openTask: null, saveFailed: false });
+    set({ openTaskId: null, openTask: null, subtasks: [], saveFailed: false });
+  },
+
+  addSubtask: async (title) => {
+    const parentId = get().openTaskId;
+    if (parentId === null) return false;
+
+    // Empty is not a subtask, and the field keeps whatever whitespace the user
+    // typed — same rule as the quick-add field (S3).
+    if (title.trim() === '') return false;
+
+    const result = await window.api.task.create({ title, parentId });
+    if (!result.ok) {
+      set({ saveFailed: true });
+      return false;
+    }
+    return true;
+  },
+
+  removeSubtask: async (id) => {
+    const result = await window.api.task.delete([id]);
+    if (!result.ok) set({ saveFailed: true });
   },
 
   setBoot: (boot) => set({ boot }),

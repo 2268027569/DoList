@@ -53,6 +53,21 @@ export interface TaskWithTags extends Task {
   tags: string[];
 }
 
+/** How many subtasks a task has, and how many of those are done. */
+export interface SubtaskCounts {
+  total: number;
+  done: number;
+}
+
+/**
+ * A row of the task list: the task, its tags, and the subtask tally its progress
+ * chip is drawn from. The tally is read with the rows because the chip is drawn on
+ * every one of them.
+ */
+export interface TaskListItem extends TaskWithTags {
+  subtasks: SubtaskCounts;
+}
+
 /** Fields a create call may set. Everything else takes its schema default. */
 export interface TaskDraft {
   title: string;

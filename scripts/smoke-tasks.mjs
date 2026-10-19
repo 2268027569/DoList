@@ -15,8 +15,12 @@
  *   7. the detail view opens on that row and its due date and priority are changed
  *      (slice S4),
  *   8. the row is moved with Alt+↓, moved back with Alt+↑, and moved down again by
- *      dragging its grip over the row below it (slice S5), and
- *   9. a fresh launch reads those same values and that same order back off the disk.
+ *      dragging its grip over the row below it (slice S5),
+ *   9. a checklist item and a "Daily" repeat are set on that row (slice S6),
+ *  10. a fresh launch reads those same values and that same order back off the disk,
+ *      and
+ *  11. ticking the repeating task off mints its next occurrence, which the list then
+ *      draws in the place the completed row had occupied (slice S6).
  *
  * Only two things come from the OS: the global shortcut, which a registered hotkey
  * only ever sees when the input queue produced it, and the app's own launch. Every
@@ -55,6 +59,8 @@ const skipBuild = process.argv.includes('--no-build');
 /** Sent as Unicode code points, so no `SendKeys` metacharacter can get in the way. */
 const FIRST_TASK = 'Buy milk';
 const SECOND_TASK = 'Call the vet';
+/** The checklist item added to the first task, and the day the repeat rolls onto. */
+const SUBTASK = 'Take the big bag';
 
 const results = [];
 
@@ -302,17 +308,26 @@ async function typeText(cdp, text) {
   }
 }
 
-/** Reads the rows straight out of the smoke database (WAL, so a read is safe). */
-function readTasks() {
+/**
+ * The rows a view would draw, read straight out of the smoke database (WAL, so a
+ * read is safe).
+ *
+ * `topLevel` is the default because that is what the Inbox query is: `sort_order`
+ * is a **group** sequence, so ordering a mix of parents and subtasks by it would
+ * sort two groups into each other.
+ */
+function readTasks(scope = 'topLevel') {
   const Database = require('better-sqlite3');
   const db = new Database(databaseFile, { readonly: true });
   try {
     db.pragma('busy_timeout = 5000');
+    const where = scope === 'topLevel' ? 'parent_id IS NULL' : scope === 'subtasks' ? 'parent_id IS NOT NULL' : '1 = 1';
     return db
       .prepare(
         'SELECT id, title, status, priority, due_at AS dueAt, due_has_time AS dueHasTime, ' +
-          'list_id AS listId, parent_id AS parentId, deleted_at AS deletedAt ' +
-          'FROM tasks ORDER BY sort_order ASC, created_at ASC',
+          'list_id AS listId, parent_id AS parentId, repeat_rule AS repeatRule, ' +
+          'repeat_mode AS repeatMode, deleted_at AS deletedAt ' +
+          `FROM tasks WHERE ${where} ORDER BY sort_order ASC, created_at ASC`,
       )
       .all();
   } finally {
@@ -320,10 +335,10 @@ function readTasks() {
   }
 }
 
-/** Local midnight tomorrow, worked out the same way the panel's own "Tomorrow" does. */
-function tomorrowStart() {
+/** Local midnight `offsetDays` from today, worked out the way the panel's presets do. */
+function dayStart(offsetDays) {
   const date = new Date();
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + 1).getTime();
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + offsetDays).getTime();
 }
 
 /** Starts the app against a smoke profile; the panel opens on its own DB. */
@@ -782,13 +797,13 @@ async function main() {
     }
 
     rows = readTasks();
-    if (rows[0].dueAt === tomorrowStart() && rows[0].dueHasTime === 0) {
+    if (rows[0].dueAt === dayStart(1) && rows[0].dueHasTime === 0) {
       pass('the due date is tomorrow at local midnight, date only', {
         dueAt: rows[0].dueAt,
-        expected: tomorrowStart(),
+        expected: dayStart(1),
       });
     } else {
-      fail(`the due date landed on ${rows[0].dueAt}, expected ${tomorrowStart()} with no clock time`);
+      fail(`the due date landed on ${rows[0].dueAt}, expected ${dayStart(1)} with no clock time`);
     }
 
     await gotoField(cdp, 'detail-priority-high');
@@ -874,6 +889,73 @@ async function main() {
       fail(`the drag produced ${JSON.stringify(dragged?.detail ?? null)} and the order ${JSON.stringify(rows.map((row) => row.title))}`);
     }
 
+    // --- phase 4d: a checklist and a repeat (slice S6) ------------------------
+    // The same detail, opened again: whatever the drag did to the list, the row is
+    // still reachable by name, and the checklist and the repeat live below the
+    // fields the previous slice covered.
+    await gotoField(cdp, 'task-title', firstId);
+    const reopened = await (async () => {
+      const since = Date.now();
+      await pressKey(cdp, 'Enter');
+      return waitForEvent('detail-opened', 5_000, since);
+    })();
+    if (reopened?.detail?.taskId === firstId) {
+      pass('the row opened its detail again after the drag');
+    } else {
+      fail(`the detail did not reopen on ${firstId}: ${JSON.stringify(reopened?.detail ?? null)}`);
+    }
+
+    await gotoField(cdp, 'detail-subtask-input');
+    const subtaskAdded = await (async () => {
+      const since = Date.now();
+      await typeText(cdp, SUBTASK);
+      await pressKey(cdp, 'Enter');
+      return waitForEvent('task-changed', 8_000, since);
+    })();
+    rows = readTasks('all');
+    const subtaskRow = rows.find((row) => row.title === SUBTASK);
+    if (subtaskAdded?.detail?.kind === 'created' && subtaskRow?.parentId === firstId) {
+      pass('a subtask typed into the detail was stored under the open task', subtaskRow);
+    } else {
+      fail(`the subtask produced ${JSON.stringify(subtaskAdded?.detail ?? null)} and the row ${JSON.stringify(subtaskRow ?? null)}`);
+    }
+    // The field is left ready for the next one, like quick-add — which is the
+    // difference between a checklist and a form.
+    const caretAfterSubtask = await activeField(cdp);
+    if (caretAfterSubtask === 'detail-subtask-input') {
+      pass('the caret stayed in the subtask field after Enter');
+    } else {
+      fail(`the caret moved to "${caretAfterSubtask}" after adding a subtask`);
+    }
+
+    await gotoField(cdp, 'detail-repeat-daily');
+    const repeatSet = await pressKeyAndWait(cdp, 'Enter');
+    rows = readTasks();
+    const repeated = rows.find((row) => row.id === firstId);
+    if (repeatSet?.detail?.kind === 'updated' && repeated?.repeatRule === 'FREQ=DAILY') {
+      pass('pressing "Daily" stored an RRULE on the task', { rule: repeated.repeatRule });
+    } else {
+      fail(`the repeat edit produced ${JSON.stringify(repeatSet?.detail ?? null)} and the rule ${JSON.stringify(repeated?.repeatRule ?? null)}`);
+    }
+
+    // Escape, then read the tally off the list itself: the `0/1` chip is drawn by the
+    // same pure function the row uses, so this is the list's own report (M02 S6).
+    const subtaskSince = Date.now();
+    await pressKey(cdp, 'Escape');
+    await waitForEvent('detail-closed', 5_000, subtaskSince);
+    const tallyChip = await evaluate(
+      cdp,
+      `(() => {
+         const chip = document.querySelector('[data-field="row-progress"][data-task-id="${firstId}"]');
+         return chip === null ? null : chip.textContent;
+       })()`,
+    );
+    if (tallyChip === '0/1') {
+      pass('the parent row drew its checklist tally', { chip: tallyChip });
+    } else {
+      fail(`the parent row's tally chip reads ${JSON.stringify(tallyChip)}, expected "0/1"`);
+    }
+
     // --- phase 5: the edits are still there after a restart -------------------
     // A second launch of the same build against the same database file: what the
     // panel shows now came off the disk rather than out of the first run's memory.
@@ -920,6 +1002,115 @@ async function main() {
       pass('the restarted app read the moved order and the edits back', restartRender.detail.rows);
     } else {
       fail(`after the restart the list reads ${JSON.stringify(restartRender?.detail?.rows ?? null)}`);
+    }
+
+    // --- phase 6: ticking a repeating task mints its next occurrence (S6) -----
+    // The one path no unit test can take: the tick goes in through the real detail
+    // view, the rule comes off the disk rather than out of this run's memory, and the
+    // row that appears is the one the list draws. The task repeats daily from
+    // tomorrow, so the occurrence a tick today mints is the day after that.
+    cdp = await attachPanel(20_000);
+    if (cdp === null) {
+      fail(`the restarted app never appeared on the debugger port ${CDP_PORT}`);
+      return;
+    }
+
+    // Expanded again with the one OS input the run makes anyway, so the window is
+    // really shown and the page is not being driven while unmapped.
+    let panelOpened = null;
+    for (let attempt = 1; attempt <= 3 && panelOpened === null; attempt += 1) {
+      const since = Date.now();
+      sendHotkey('ctrl+shift+n');
+      panelOpened = await waitForEvent('panel-expanded', 2_000, since);
+      if (panelOpened === null) log(`the shortcut did not open the panel on attempt ${attempt} — retrying`);
+    }
+    if (panelOpened === null) {
+      fail('the quick-add shortcut did not open the panel after the restart');
+      return;
+    }
+    pass('the shortcut opened the panel again on the restarted app', panelOpened.detail);
+
+    await gotoField(cdp, 'task-title', firstId);
+    const detailAgain = await (async () => {
+      const since = Date.now();
+      await pressKey(cdp, 'Enter');
+      return waitForEvent('detail-opened', 5_000, since);
+    })();
+    if (detailAgain?.detail?.taskId === firstId) {
+      pass('the restarted app opened the repeating task again');
+    } else {
+      fail(`the detail did not reopen on ${firstId}: ${JSON.stringify(detailAgain?.detail ?? null)}`);
+    }
+
+    const knownIds = new Set(readTasks().map((row) => row.id));
+    await gotoField(cdp, 'detail-status-done');
+    const ticked = await pressKeyAndWait(cdp, 'Enter');
+    if (ticked?.detail?.kind === 'updated' && (ticked.detail.ids?.length ?? 0) === 2) {
+      pass('ticking the task was announced as one update naming both rows', ticked.detail);
+    } else {
+      fail(`the tick announced ${JSON.stringify(ticked?.detail ?? null)}, expected an update with two ids`);
+    }
+
+    const afterTick = readTasks();
+    const completed = afterTick.find((row) => row.id === firstId);
+    const minted = afterTick.find((row) => !knownIds.has(row.id) && row.title === FIRST_TASK);
+    if (afterTick.length === 3 && completed?.status === 'done' && minted !== undefined) {
+      pass('the tick marked the task done and wrote the next occurrence beside it', {
+        topLevel: afterTick.map((row) => row.status),
+      });
+    } else {
+      fail(`after the tick the top level reads ${JSON.stringify(afterTick)}`);
+    }
+
+    if (
+      minted?.status === 'todo' &&
+      minted.repeatRule === 'FREQ=DAILY' &&
+      minted.dueAt === dayStart(2) &&
+      minted.dueHasTime === 0
+    ) {
+      pass('the new occurrence is open, still daily, and due the day after tomorrow', {
+        dueAt: minted.dueAt,
+        expected: dayStart(2),
+      });
+    } else {
+      fail(
+        `the new occurrence reads ${JSON.stringify(minted ?? null)}, expected an open FREQ=DAILY task due ${dayStart(2)} at local midnight`,
+      );
+    }
+
+    const mintedChildren = readTasks('subtasks').filter((row) => row.parentId === minted?.id);
+    if (minted !== undefined && mintedChildren.length === 0) {
+      pass('the new occurrence starts with a fresh checklist');
+    } else {
+      fail(`the new occurrence carries ${mintedChildren.length} subtask(s)`);
+    }
+
+    // The list is read after the detail closes, because that is when the list is the
+    // thing on screen and the thing that reports what it drew (M02 D10: the ticked row
+    // leaves the Inbox filter and the new occurrence takes its place).
+    const listSince = Date.now();
+    await pressKey(cdp, 'Escape');
+    await waitForEvent('detail-closed', 5_000, listSince);
+    const afterTickRender = await waitForEvent('tasks-rendered', 5_000, listSince);
+    if (
+      afterTickRender?.detail?.count === 2 &&
+      afterTickRender?.detail?.titles?.[0] === SECOND_TASK &&
+      afterTickRender?.detail?.titles?.[1] === FIRST_TASK
+    ) {
+      pass('the list drew the new occurrence where the completed row had been', afterTickRender.detail.titles);
+    } else {
+      fail(
+        `the list drew ${JSON.stringify(afterTickRender?.detail ?? null)}, expected the new occurrence in the completed row's place`,
+      );
+    }
+    // The tally is the one thing that tells the swapped-in row from the one it
+    // replaced: the completed row carried a checklist, the new one carries none.
+    if (afterTickRender?.detail?.rows?.[1]?.progress === null) {
+      pass('the row in its place is the new occurrence — no checklist tally');
+    } else {
+      fail(
+        `the row in the completed task's place reports a tally of ${JSON.stringify(afterTickRender?.detail?.rows?.[1]?.progress ?? null)}`,
+      );
     }
   } finally {
     if (cdp !== null) cdp.close();

@@ -1,4 +1,4 @@
-import type { RepeatMode, ReorderScope, Task, TaskDraft, TaskFilter, TaskPatch, TaskPriority, TaskStatus } from '@shared/types/task';
+import type { RepeatMode, ReorderScope, SubtaskCounts, Task, TaskDraft, TaskFilter, TaskPatch, TaskPriority, TaskStatus } from '@shared/types/task';
 import type { DayBounds } from '@shared/utils/day';
 import { newId } from '@shared/utils/id';
 import { buildTaskQuery } from '@shared/utils/task-query';
@@ -274,6 +274,37 @@ export function restore(ids: readonly string[], now: number): number {
     return affected;
   });
   return run();
+}
+
+/**
+ * How many subtasks each of `parentIds` has, and how many are done — one grouped
+ * query rather than two counts per row, so a 500-row page stays one round trip.
+ *
+ * Soft-deleted and cancelled subtasks are excluded: a task in the recycle bin is
+ * not part of anyone's progress, and one that was dropped should not hold a parent
+ * at "2/3" forever.
+ */
+export function subtaskCounts(parentIds: readonly string[]): Map<string, SubtaskCounts> {
+  const counts = new Map<string, SubtaskCounts>();
+  const unique = [...new Set(parentIds)];
+  if (unique.length === 0) return counts;
+
+  const rows = getDatabase()
+    .prepare(
+      `SELECT parent_id, COUNT(*) AS total,
+              SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS done
+         FROM tasks
+        WHERE parent_id IN (${unique.map(() => '?').join(', ')})
+          AND deleted_at IS NULL
+          AND status <> 'cancelled'
+        GROUP BY parent_id`,
+    )
+    .all(...unique) as { parent_id: string; total: number; done: number }[];
+
+  // A parent with no subtasks gets no row back from a GROUP BY, which is why the
+  // caller reads `?? { total: 0, done: 0 }` rather than looking for it here.
+  for (const row of rows) counts.set(row.parent_id, { total: row.total, done: row.done ?? 0 });
+  return counts;
 }
 
 /** Runs a filter (docs/ARCHITECTURE.md §5.6) and returns the rows it selects. */

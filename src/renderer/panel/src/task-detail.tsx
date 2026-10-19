@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { TaskPriority, TaskStatus, TaskWithTags } from '@shared/types/task';
-import { TASK_PRIORITIES, TASK_STATUSES } from '@shared/types/task';
+import type { RepeatMode, TaskPriority, TaskStatus, TaskWithTags } from '@shared/types/task';
+import { REPEAT_MODES, TASK_PRIORITIES, TASK_STATUSES } from '@shared/types/task';
 import {
   dueToday,
   dueTomorrow,
@@ -12,7 +12,9 @@ import {
   toTimeValue,
   withDueTime,
 } from '@shared/utils/task-dates';
+import { progressText } from '@shared/utils/task-tree';
 
+import { REPEAT_PRESETS, presetFor } from './repeat-presets';
 import { usePanelStore } from './store';
 
 /** Priority 0 reads as "none" here; the list row draws nothing for it. */
@@ -36,6 +38,12 @@ const STATUS_LABEL: Record<TaskStatus, string> = {
   doing: 'status.doing',
   done: 'status.done',
   cancelled: 'status.cancelled',
+};
+
+/** The two ways a repeat can count, named for the field and for the label key. */
+const REPEAT_MODE_LABEL: Record<RepeatMode, string> = {
+  fixed: 'detail.repeat.fixed',
+  after_completion: 'detail.repeat.afterCompletion',
 };
 
 const INPUT =
@@ -68,6 +76,10 @@ export function TaskDetail({
   const saveOpenTask = usePanelStore((state) => state.saveOpenTask);
   const deleteOpenTask = usePanelStore((state) => state.deleteOpenTask);
   const saveFailed = usePanelStore((state) => state.saveFailed);
+  const subtasks = usePanelStore((state) => state.subtasks);
+  const addSubtask = usePanelStore((state) => state.addSubtask);
+  const removeSubtask = usePanelStore((state) => state.removeSubtask);
+  const toggleTask = usePanelStore((state) => state.toggleTask);
 
   /**
    * Seeded from the row once rather than kept in step with every re-read: a
@@ -85,6 +97,16 @@ export function TaskDetail({
     task.remindLeadMin === null ? '' : String(task.remindLeadMin),
   );
   const [tagDraft, setTagDraft] = useState('');
+  const [subtaskDraft, setSubtaskDraft] = useState('');
+  /**
+   * The custom-rule field is open when the task's rule is not one of the presets —
+   * including when it has none, where the user has to reach for it deliberately.
+   */
+  const [customRepeat, setCustomRepeat] = useState(task.repeatRule ?? '');
+  const [repeatOpen, setRepeatOpen] = useState(
+    task.repeatRule !== null && presetFor(task.repeatRule) === null,
+  );
+  const subtaskField = useRef<HTMLInputElement>(null);
   const titleField = useRef<HTMLInputElement>(null);
   /**
    * Frozen at mount: the harness is told which row this view opened on, and the
@@ -187,6 +209,46 @@ export function TaskDetail({
     void saveOpenTask({ tags: task.tags.filter((tag) => tag !== name) });
   };
 
+  /**
+   * Throws one of the preset switches: the rule it names, or turning the repeat off
+   * when it is already the active one. A single control that both sets and clears
+   * keeps the row from needing a separate "none" button to say the same thing.
+   */
+  const choosePreset = (rule: string): void => {
+    setRepeatOpen(false);
+    setCustomRepeat('');
+    void saveOpenTask({ repeatRule: task.repeatRule === rule ? null : rule });
+  };
+
+  /**
+   * Commits the custom field. Empty clears the repeat; anything else is sent as-is
+   * and the main process is the one that decides — an invalid rule comes back
+   * rejected, which is reported in the header and leaves the text where it is, so
+   * the user can fix the typo rather than lose it.
+   */
+  const commitCustomRepeat = (): void => {
+    const rule = customRepeat.trim();
+    if (rule === '' && task.repeatRule === null) return;
+    void saveOpenTask({ repeatRule: rule === '' ? null : rule });
+  };
+
+  const addSubtaskFromDraft = (): void => {
+    const title = subtaskDraft.trim();
+    if (title === '') return;
+    setSubtaskDraft('');
+    void addSubtask(title).then((added) => {
+      // Same as the quick-add field: the field is left ready for the next one.
+      if (added) subtaskField.current?.focus();
+    });
+  };
+
+  // Counted from what the checklist shows rather than from the row's tally: the
+  // two must agree, and this is the one the user is looking at.
+  const subtaskProgress = progressText({
+    total: subtasks.length,
+    done: subtasks.filter((item) => item.status === 'done').length,
+  });
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-3">
       <header className="flex items-center gap-1.5">
@@ -283,6 +345,67 @@ export function TaskDetail({
           </div>
         </Field>
 
+        <Field label={t('detail.repeat.label')}>
+          <div className="flex flex-wrap gap-1.5">
+            {REPEAT_PRESETS.map((preset) => (
+              <Choice
+                key={preset.key}
+                field={`detail-repeat-${preset.key}`}
+                active={task.repeatRule === preset.rule}
+                onClick={() => choosePreset(preset.rule)}
+              >
+                {t(`detail.repeat.${preset.key}`)}
+              </Choice>
+            ))}
+            <Choice
+              field="detail-repeat-custom"
+              active={repeatOpen}
+              // Typos survive here: the field is left as the user typed it when the
+              // write is rejected, so the correction is a fix rather than a retype.
+              onClick={() => setRepeatOpen((open) => !open)}
+            >
+              {t('detail.repeat.custom')}
+            </Choice>
+          </div>
+
+          {repeatOpen && (
+            <input
+              type="text"
+              value={customRepeat}
+              placeholder={t('detail.repeat.customPlaceholder')}
+              aria-label={t('detail.repeat.custom')}
+              data-field="detail-repeat-rule"
+              onChange={(event) => setCustomRepeat(event.target.value)}
+              onBlur={commitCustomRepeat}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter') return;
+                event.preventDefault();
+                commitCustomRepeat();
+              }}
+              className={`${INPUT} mt-1.5 font-mono text-xs`}
+            />
+          )}
+
+          {/*
+           * The mode is only meaningful once there is a rule to count, so it stays
+           * out of the way until then.
+           */}
+          {task.repeatRule !== null && (
+            <div className="mt-1.5 flex flex-wrap gap-1.5">
+              {REPEAT_MODES.map((mode) => (
+                <Choice
+                  key={mode}
+                  field={`detail-repeat-mode-${mode}`}
+                  active={(task.repeatMode ?? 'fixed') === mode}
+                  onClick={() => void saveOpenTask({ repeatMode: mode })}
+                >
+                  {t(REPEAT_MODE_LABEL[mode])}
+                </Choice>
+              ))}
+            </div>
+          )}
+        </Field>
+
         <Field label={t('detail.remind')}>
           <input
             type="number"
@@ -362,6 +485,77 @@ export function TaskDetail({
               if (event.key !== 'Enter') return;
               event.preventDefault();
               addTag();
+            }}
+            className={`${INPUT} mt-1.5`}
+          />
+        </Field>
+
+        <Field
+          label={
+            subtaskProgress === null
+              ? t('detail.subtasks')
+              : `${t('detail.subtasks')} · ${subtaskProgress}`
+          }
+        >
+          <ul className="flex flex-col gap-0.5">
+            {subtasks.map((subtask) => {
+              const done = subtask.status === 'done';
+              return (
+                <li key={subtask.id} className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked={done}
+                    aria-label={t(done ? 'row.markUndone' : 'row.markDone')}
+                    data-field="detail-subtask-toggle"
+                    data-task-id={subtask.id}
+                    onClick={() => void toggleTask(subtask.id, !done)}
+                    className={`size-3.5 shrink-0 rounded-full border transition-colors ${
+                      done
+                        ? 'border-[var(--status-done)] bg-[var(--status-done)]'
+                        : 'border-[var(--border-strong)] hover:border-[var(--accent)]'
+                    }`}
+                  />
+                  <span
+                    className={`min-w-0 flex-1 text-xs break-words ${
+                      done
+                        ? 'text-[var(--text-muted)] line-through'
+                        : 'text-[var(--text-primary)]'
+                    }`}
+                  >
+                    {subtask.title}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={t('detail.subtasks.remove', { title: subtask.title })}
+                    data-field="detail-subtask-remove"
+                    data-task-id={subtask.id}
+                    onClick={() => void removeSubtask(subtask.id)}
+                    className="shrink-0 rounded px-1 text-xs text-[var(--text-muted)] hover:text-[var(--status-overdue)]"
+                  >
+                    ×
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          {/*
+           * Below the list rather than above it: adding one does not push the field
+           * the caret is in down the screen, so a run of them can be typed without
+           * the panel scrolling under the user.
+           */}
+          <input
+            ref={subtaskField}
+            type="text"
+            value={subtaskDraft}
+            placeholder={t('detail.subtasks.add')}
+            aria-label={t('detail.subtasks.add')}
+            data-field="detail-subtask-input"
+            onChange={(event) => setSubtaskDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== 'Enter') return;
+              event.preventDefault();
+              addSubtaskFromDraft();
             }}
             className={`${INPUT} mt-1.5`}
           />

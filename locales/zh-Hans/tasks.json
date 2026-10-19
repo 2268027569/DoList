@@ -33,5 +33,18 @@
   "detail.tags.add": "输入标签后按回车",
   "detail.tags.remove": "移除标签 {name}",
   "detail.delete": "删除任务",
-  "detail.saveFailed": "未保存——改动仍在这里，可以再试一次。"
+  "detail.saveFailed": "未保存——改动仍在这里，可以再试一次。",
+  "detail.subtasks": "子任务",
+  "detail.subtasks.add": "输入子任务后按回车",
+  "detail.subtasks.remove": "删除子任务 {title}",
+  "detail.repeat.label": "重复",
+  "detail.repeat.daily": "每天",
+  "detail.repeat.weekdays": "每个工作日",
+  "detail.repeat.weekly": "每周",
+  "detail.repeat.monthly": "每月",
+  "detail.repeat.yearly": "每年",
+  "detail.repeat.custom": "自定义",
+  "detail.repeat.customPlaceholder": "FREQ=WEEKLY;INTERVAL=2",
+  "detail.repeat.fixed": "按原计划",
+  "detail.repeat.afterCompletion": "完成后计时"
 }

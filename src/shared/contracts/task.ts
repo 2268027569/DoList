@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 import type { ReorderScope, TaskFilter } from '../types/task';
 import { REPEAT_MODES, TASK_SORTS, TASK_STATUSES } from '../types/task';
+import { isValidRule } from '../utils/recurrence';
 import { TASK_QUERY_MAX_LIMIT } from '../utils/task-query';
 
 /**
@@ -22,8 +23,17 @@ const identifier = z.string().min(1).max(128);
 
 const title = z.string().trim().min(1).max(500);
 const notes = z.string().max(20_000);
-/** RRULE text is only sanity-checked here; S6 parses it with `rrule` (M02 D2). */
-const repeatRule = z.string().min(1).max(1_000);
+/**
+ * A repeat rule, checked by parsing it (M02 D2). The panels' presets are a few
+ * known rules, but "custom" means whatever the user typed, and a typo has to come
+ * back as a validation failure here rather than as a task that silently never
+ * repeats — the repository would store the text either way.
+ */
+const repeatRule = z
+  .string()
+  .min(1)
+  .max(1_000)
+  .refine(isValidRule, { message: 'not an RFC 5545 RRULE property list' });
 const tagName = z.string().trim().min(1).max(64);
 
 const status = z.enum(TASK_STATUSES);

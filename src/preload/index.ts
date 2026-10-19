@@ -10,7 +10,7 @@ import type {
 import type { TaskCreateInput, TaskChangedPayload, TaskPatchInput, TaskQueryInput } from '@shared/contracts/task';
 import type { AppSettings } from '@shared/contracts/settings';
 import type { BootParams, MarkerAnchor } from '@shared/types/app';
-import type { ReorderScope, TaskWithTags } from '@shared/types/task';
+import type { ReorderScope, TaskListItem, TaskWithTags } from '@shared/types/task';
 import type { IpcResult } from '@shared/types/ipc';
 
 /**
@@ -43,8 +43,12 @@ const api = {
     set: (patch: Partial<AppSettings>) => invoke<AppSettings>(IPC.settings.set, patch),
   },
   task: {
-    /** Filter fields mirror `TaskFilter`; the main process clamps the row window. */
-    query: (filter: TaskQueryInput = {}) => invoke<TaskWithTags[]>(IPC.task.query, filter),
+    /**
+     * Filter fields mirror `TaskFilter`; the main process clamps the row window.
+     * Each row comes back with its tags and its subtask tally, both of which the
+     * list draws (M02 S6), so a render is one round trip.
+     */
+    query: (filter: TaskQueryInput = {}) => invoke<TaskListItem[]>(IPC.task.query, filter),
     /** One row by id: the open detail view's own read (M02 S4). */
     get: (id: string) => invoke<TaskWithTags | null>(IPC.task.get, { id }),
     create: (input: TaskCreateInput) => invoke<TaskWithTags>(IPC.task.create, input),

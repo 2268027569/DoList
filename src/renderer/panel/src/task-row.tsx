@@ -2,9 +2,10 @@ import { memo } from 'react';
 import type { PointerEvent as ReactPointerEvent, ReactElement, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { TaskPriority, TaskWithTags } from '@shared/types/task';
+import type { TaskListItem, TaskPriority } from '@shared/types/task';
 import type { DropEdge } from '@shared/utils/sort-order';
 import { type DueChipKind, dueChip } from '@shared/utils/task-due-label';
+import { allSubtasksDone, progressText } from '@shared/utils/task-tree';
 
 import { usePanelStore } from './store';
 
@@ -29,7 +30,7 @@ const DROP_EDGE_CLASS: Record<DropEdge, string> = {
 };
 
 export interface TaskRowProps {
-  task: TaskWithTags;
+  task: TaskListItem;
   /** Position inside the group, which is what a move is measured from. */
   index: number;
   /** How far this row is following the pointer while it is the one being dragged. */
@@ -67,6 +68,10 @@ export const TaskRow = memo(function TaskRow({
   const done = task.status === 'done';
   const due = dueChip(task.dueAt, task.dueHasTime, i18n.language);
   const priority = PRIORITY[task.priority];
+  // A parent's checklist reads as `2/3`, and turns green once it is complete — the
+  // only cue in the list that a task has been broken down, without opening it.
+  const progress = progressText(task.subtasks);
+  const subtasksDone = allSubtasksDone(task.subtasks);
 
   return (
     <li
@@ -124,10 +129,21 @@ export const TaskRow = memo(function TaskRow({
           {task.title}
         </button>
 
-        {(due !== null || priority !== undefined || task.tags.length > 0) && (
+        {(due !== null || priority !== undefined || progress !== null || task.tags.length > 0) && (
           <div className="mt-0.5 flex flex-wrap items-center gap-1">
             {due !== null && <Chip color={DUE_COLOR[due.kind]}>{due.text}</Chip>}
             {priority !== undefined && <Chip color={priority.color}>{t(priority.label)}</Chip>}
+            {progress !== null && (
+              <Chip
+                color={subtasksDone ? 'var(--status-done)' : undefined}
+                // Named for the harness, which asserts the tally rather than
+                // screenshotting it (§13).
+                field="row-progress"
+                taskId={task.id}
+              >
+                {progress}
+              </Chip>
+            )}
             {task.tags.map((tag) => (
               <Chip key={tag}>{`#${tag}`}</Chip>
             ))}
@@ -160,12 +176,26 @@ export const TaskRow = memo(function TaskRow({
   );
 });
 
-function Chip({ color, children }: { color?: string; children: ReactNode }): ReactElement {
+function Chip({
+  color,
+  field,
+  taskId,
+  children,
+}: {
+  color?: string;
+  /** A `data-field` name, when the harness needs to find this chip (§13). */
+  field?: string;
+  /** Which row the chip belongs to, so a named chip is found on the right row. */
+  taskId?: string;
+  children: ReactNode;
+}): ReactElement {
   return (
     <span
       // The colour is a token name only known at runtime, so it goes through a
       // style attribute: a class built from a template is invisible to Tailwind.
       style={color === undefined ? undefined : { color }}
+      data-field={field}
+      data-task-id={taskId}
       className="rounded bg-[var(--bg-surface-muted)] px-1.5 py-0.5 text-[11px] leading-4 text-[var(--text-muted)]"
     >
       {children}

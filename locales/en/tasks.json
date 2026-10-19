@@ -33,5 +33,18 @@
   "detail.tags.add": "Add a tag and press Enter",
   "detail.tags.remove": "Remove tag {name}",
   "detail.delete": "Delete task",
-  "detail.saveFailed": "Not saved — the change is still here, try again."
+  "detail.saveFailed": "Not saved — the change is still here, try again.",
+  "detail.subtasks": "Subtasks",
+  "detail.subtasks.add": "Add a subtask and press Enter",
+  "detail.subtasks.remove": "Remove subtask {title}",
+  "detail.repeat.label": "Repeat",
+  "detail.repeat.daily": "Daily",
+  "detail.repeat.weekdays": "Every weekday",
+  "detail.repeat.weekly": "Weekly",
+  "detail.repeat.monthly": "Monthly",
+  "detail.repeat.yearly": "Yearly",
+  "detail.repeat.custom": "Custom",
+  "detail.repeat.customPlaceholder": "FREQ=WEEKLY;INTERVAL=2",
+  "detail.repeat.fixed": "On schedule",
+  "detail.repeat.afterCompletion": "After completion"
 }

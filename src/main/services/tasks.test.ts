@@ -74,6 +74,42 @@ describe('listTasks', () => {
       expect(listTasks({ includeDeleted: true })).toHaveLength(1);
     });
   });
+
+  it('carries the subtask tally back with the rows', () => {
+    withTempDatabase(() => {
+      const parent = createTaskFromInput({ title: 'move house' }, NOW).task;
+      const plain = createTaskFromInput({ title: 'no subtasks' }, NOW + 1).task;
+      const a = createTaskFromInput({ title: 'boxes', parentId: parent.id }, NOW + 2).task;
+      const b = createTaskFromInput({ title: 'van', parentId: parent.id }, NOW + 3).task;
+      createTaskFromInput({ title: 'cancelled', parentId: parent.id }, NOW + 4);
+      updateTaskFromPatch(a.id, { status: 'done' }, NOW + 5);
+      updateTaskFromPatch(b.id, { status: 'done' }, NOW + 6);
+
+      const list = listTasks();
+      const first = list.find((task) => task.id === parent.id);
+      const second = list.find((task) => task.id === plain.id);
+
+      expect(first?.subtasks).toEqual({ total: 3, done: 2 });
+      expect(second?.subtasks).toEqual({ total: 0, done: 0 });
+    });
+  });
+
+  it('drops cancelled and binned subtasks out of the tally', () => {
+    withTempDatabase(() => {
+      const parent = createTaskFromInput({ title: 'parent' }, NOW).task;
+      const keep = createTaskFromInput({ title: 'keep', parentId: parent.id }, NOW + 1).task;
+      const dropped = createTaskFromInput({ title: 'dropped', parentId: parent.id }, NOW + 2).task;
+      const binned = createTaskFromInput({ title: 'binned', parentId: parent.id }, NOW + 3).task;
+      updateTaskFromPatch(dropped.id, { status: 'cancelled' }, NOW + 4);
+      deleteTasks([binned.id], NOW + 5);
+
+      expect(listTasks().find((task) => task.id === parent.id)?.subtasks).toEqual({
+        total: 1,
+        done: 0,
+      });
+      expect(keep.id).toBeDefined();
+    });
+  });
 });
 
 describe('readTask', () => {
@@ -112,6 +148,120 @@ describe('updateTaskFromPatch', () => {
       // The change descriptor is still built, but the handler drops it: it only
       // announces a write that happened.
       expect(change.kind).toBe('updated');
+    });
+  });
+});
+
+describe('repeating tasks', () => {
+  /** A daily 9am task whose due is the day before the tick, i.e. ticked late. */
+  const repeating = (overrides: Record<string, unknown> = {}) =>
+    createTaskFromInput(
+      {
+        title: 'stand-up',
+        dueAt: new Date(2026, 4, 11, 9).getTime(),
+        dueHasTime: true,
+        repeatRule: 'FREQ=DAILY',
+        repeatMode: 'fixed',
+        priority: 2,
+        notes: 'the usual',
+        tags: ['work'],
+        ...overrides,
+      },
+      NOW,
+    ).task;
+
+  it('mints the next occurrence when the task is ticked off', () => {
+    withTempDatabase(() => {
+      const task = repeating();
+
+      const { task: done, next, change } = updateTaskFromPatch(task.id, { status: 'done' }, NOW);
+
+      expect(done?.status).toBe('done');
+      expect(next).not.toBeNull();
+      expect(next?.title).toBe('stand-up');
+      expect(next?.status).toBe('todo');
+      // Late by a day, so the follow-up is the next 9am rather than one already
+      // in the past.
+      expect(new Date(next?.dueAt as number).getDate()).toBe(13);
+      expect(new Date(next?.dueAt as number).getHours()).toBe(9);
+      expect(next?.dueHasTime).toBe(true);
+      expect(next?.repeatRule).toBe('FREQ=DAILY');
+      // What describes the task carries over; what describes this run of it does not.
+      expect(next?.notes).toBe('the usual');
+      expect(next?.priority).toBe(2);
+      expect(next?.tags).toEqual(['work']);
+      expect(next?.completedAt).toBeNull();
+      // One action, two rows named, so the undo stack and the marker's recount see
+      // the whole effect of the tick.
+      expect(change).toEqual({ kind: 'updated', ids: [task.id, next?.id] });
+    });
+  });
+
+  it('leaves the task alone when it does not repeat', () => {
+    withTempDatabase(() => {
+      const task = createTaskFromInput({ title: 'one-off' }, NOW).task;
+
+      const { next, change } = updateTaskFromPatch(task.id, { status: 'done' }, NOW + 1);
+
+      expect(next).toBeNull();
+      expect(change.ids).toEqual([task.id]);
+      expect(listTasks({ status: 'done' })).toHaveLength(1);
+    });
+  });
+
+  it('does not mint a second occurrence when a patch that is not the tick is saved', () => {
+    withTempDatabase(() => {
+      const task = repeating({ dueAt: new Date(2026, 8, 1, 9).getTime() });
+      updateTaskFromPatch(task.id, { status: 'done' }, NOW + 1);
+      // Editing the completed task's title must not be read as completing it again.
+      updateTaskFromPatch(task.id, { title: 'renamed' }, NOW + 2);
+
+      expect(listTasks().find((t) => t.title === 'renamed')?.status).toBe('done');
+      expect(listTasks()).toHaveLength(2);
+    });
+  });
+
+  it('counts the interval from the tick in after_completion mode', () => {
+    withTempDatabase(() => {
+      const task = repeating({
+        repeatMode: 'after_completion',
+        repeatRule: 'FREQ=DAILY;INTERVAL=3',
+      });
+
+      // Ticked on the 12th at 10:00, so the follow-up is the 15th at 9am — the
+      // task's own clock time, not the hour it happened to be completed at.
+      const { next } = updateTaskFromPatch(task.id, { status: 'done' }, NOW);
+      const due = new Date(next?.dueAt as number);
+
+      expect(due.getDate()).toBe(15);
+      expect(due.getHours()).toBe(9);
+    });
+  });
+
+  it('mints nothing when the rule has run out', () => {
+    withTempDatabase(() => {
+      const task = repeating({ repeatRule: 'FREQ=DAILY;COUNT=1' });
+
+      const { next } = updateTaskFromPatch(task.id, { status: 'done' }, NOW);
+
+      expect(next).toBeNull();
+      expect(listTasks()).toHaveLength(1);
+    });
+  });
+
+  it('gives the new occurrence a checklist of its own', () => {
+    withTempDatabase(() => {
+      const task = repeating();
+      const subtask = createTaskFromInput({ title: 'check boxes', parentId: task.id }, NOW + 1)
+        .task;
+      updateTaskFromPatch(subtask.id, { status: 'done' }, NOW + 2);
+
+      const { next } = updateTaskFromPatch(task.id, { status: 'done' }, NOW + 3);
+
+      expect(next).not.toBeNull();
+      expect(listTasks({ parentId: next?.id as string })).toEqual([]);
+      // The completed one keeps the subtask it had.
+      expect(listTasks({ parentId: task.id })).toHaveLength(1);
     });
   });
 });

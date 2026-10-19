@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import { dropEdge, landingIndex } from '@shared/utils/sort-order';
 import { dueChip } from '@shared/utils/task-due-label';
+import { progressText } from '@shared/utils/task-tree';
 
 import { TaskRow } from './task-row';
 import { usePanelStore } from './store';
@@ -77,6 +78,10 @@ export function TaskList(): ReactElement {
         title: task.title,
         priority: task.priority,
         due: dueChip(task.dueAt, task.dueHasTime, i18n.language)?.text ?? null,
+        // The subtask tally goes with the row report for the same reason the chips
+        // do: it is drawn by a pure function, and one the harness cannot read here
+        // cannot pass there either.
+        progress: progressText(task.subtasks),
       })),
     });
   }, [tasks, status, i18n.language]);

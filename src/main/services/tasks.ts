@@ -1,5 +1,12 @@
 import type { TaskChangedPayload, TaskCreateInput, TaskQueryInput } from '@shared/contracts/task';
-import type { ReorderScope, Task, TaskPatch, TaskWithTags } from '@shared/types/task';
+import type {
+  ReorderScope,
+  Task,
+  TaskListItem,
+  TaskPatch,
+  TaskWithTags,
+} from '@shared/types/task';
+import { nextOccurrence } from '@shared/utils/recurrence';
 import { tagsOfTasks } from '../db/repositories/tags';
 import {
   createTask,
@@ -8,6 +15,7 @@ import {
   reorderTasks,
   restore,
   softDelete,
+  subtaskCounts,
   updateTask,
 } from '../db/repositories/tasks';
 
@@ -31,11 +39,23 @@ export interface TaskWriteResult extends TaskWrite {
   affected: number;
 }
 
-/** Reads the rows a filter selects, each with its tag names. */
-export function listTasks(filter: TaskQueryInput = {}): TaskWithTags[] {
+/**
+ * Reads the rows a filter selects, each with its tag names and its subtask tally.
+ *
+ * Both extras are read in the same call because both are drawn on every row: a
+ * second round trip per render would be paid on every keystroke in the quick-add
+ * field, since each one re-fetches the list (M02 D4).
+ */
+export function listTasks(filter: TaskQueryInput = {}): TaskListItem[] {
   const tasks = queryTasks(filter);
-  const tags = tagsOfTasks(tasks.map((task) => task.id));
-  return tasks.map((task) => ({ ...task, tags: tags.get(task.id) ?? [] }));
+  const ids = tasks.map((task) => task.id);
+  const tags = tagsOfTasks(ids);
+  const subtasks = subtaskCounts(ids);
+  return tasks.map((task) => ({
+    ...task,
+    tags: tags.get(task.id) ?? [],
+    subtasks: subtasks.get(task.id) ?? { total: 0, done: 0 },
+  }));
 }
 
 /** Reads one task with its tags, or `null` when the id is unknown. */
@@ -57,17 +77,79 @@ export function createTaskFromInput(input: TaskCreateInput, now: number = Date.n
 /**
  * Applies a patch. `task` is `null` when the id is unknown — the handler reports
  * `NOT_FOUND` in that case and must not notify, since nothing changed.
+ *
+ * Ticking off a task that repeats also **creates its next occurrence** (M02 D10):
+ * the completed one stays as the record of what was done, and the new one is the
+ * same task moved forward. That is why the change descriptor can name two rows for
+ * one user action — `ids` carries both, so the undo stack and the marker's recount
+ * see the whole effect of the tick rather than half of it.
  */
 export function updateTaskFromPatch(
   id: string,
   patch: TaskPatch,
   now: number = Date.now(),
-): { task: TaskWithTags | null; change: TaskChangedPayload } {
+): { task: TaskWithTags | null; next: TaskWithTags | null; change: TaskChangedPayload } {
+  const before = getTask(id);
   const task = updateTask(id, patch, now);
+  if (task === null) return { task: null, next: null, change: { kind: 'updated', ids: [id] } };
+
+  // Only the transition matters, not the resulting status: unticking a task and
+  // ticking it again is a new completion and does mint a new occurrence.
+  const next =
+    task.status === 'done' && before?.status !== 'done' ? scheduleNextOccurrence(task, now) : null;
+
   return {
-    task: task === null ? null : withTags(task),
-    change: { kind: 'updated', ids: [id] },
+    task: withTags(task),
+    next: next === null ? null : withTags(next),
+    change: { kind: 'updated', ids: next === null ? [id] : [id, next.id] },
   };
+}
+
+/**
+ * The task's next occurrence, written as a new row, or `null` when there is none.
+ *
+ * What carries over is what describes *the task*: title, list, notes, priority,
+ * tags, estimate, reminder lead, and the rule itself. What does not is what
+ * describes *this run of it*: the subtasks (a fresh checklist, not one already
+ * ticked), the actual time and the completion stamp — and the new row starts open,
+ * because the whole point of it is that there is still work to do.
+ */
+function scheduleNextOccurrence(task: Task, now: number): Task | null {
+  if (task.repeatRule === null) return null;
+
+  // A task with no due still repeats: without a schedule to stay on, the pattern
+  // is anchored on the completion, which puts the first occurrence one interval
+  // after the moment the user ticked it.
+  const anchor = task.dueAt ?? now;
+  const dueAt = nextOccurrence({
+    rule: task.repeatRule,
+    mode: task.repeatMode ?? 'fixed',
+    due: anchor,
+    dueHasTime: task.dueHasTime,
+    now,
+  });
+  // The rule has run out (an exhausted `COUNT` / `UNTIL`) or is not one at all.
+  if (dueAt === null) return null;
+
+  return createTask(
+    {
+      title: task.title,
+      listId: task.listId,
+      // A repeating subtask repeats under the same parent; the repository refuses
+      // a parent that would nest deeper than one level.
+      parentId: task.parentId,
+      notes: task.notes,
+      priority: task.priority,
+      dueAt,
+      dueHasTime: task.dueHasTime,
+      repeatRule: task.repeatRule,
+      repeatMode: task.repeatMode,
+      estimateMin: task.estimateMin,
+      remindLeadMin: task.remindLeadMin,
+      tags: tagsOfTasks([task.id]).get(task.id) ?? [],
+    },
+    now,
+  );
 }
 
 /** Soft-deletes the ids, plus the subtasks that go down with them. */

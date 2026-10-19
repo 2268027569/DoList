@@ -7,7 +7,7 @@
 > verified.
 
 - **状态**：已确认（2026-10-19）——D2 用 `rrule` 库、D6 全屏替换式、S7/S8 本轮一并做完
-- **进度**：S0 ✅ 测试地基 → S1 ✅ 数据层 → S2 ✅ IPC → S3 ✅ 列表与快速新增 → S4 ✅ 详情与字段编辑 → **S5 ✅ 排序与拖拽（2026-10-19）** → 下一片 S6 子任务与重复
+- **进度**：S0 ✅ 测试地基 → S1 ✅ 数据层 → S2 ✅ IPC → S3 ✅ 列表与快速新增 → S4 ✅ 详情与字段编辑 → S5 ✅ 排序与拖拽 → **S6 ✅ 子任务与重复（2026-10-19）** → 下一片 S7 撤销 / 批量 / 附件
   - S1 落地：迁移 `0002_task_fields.sql`（加 `remind_lead_min`）、`shared/types/task.ts`、`shared/utils/id.ts`（UUID v7）、`shared/utils/task-query.ts`（过滤 → SQL + 排序白名单）、`repositories/tasks.ts`（增删改查 / 软删级联 / 恢复 / 重排）、`repositories/tags.ts`、`repositories/attachments.ts`；不变量见 ARCHITECTURE §5.1，真库用例 30 例
   - S2 落地：`shared/contracts/task.ts`（zod 契约）、`channels.ts` 的 6 条任务通道 + `event:task-changed`、`main/services/tasks.ts`（域服务，不 import electron）、`main/services/task-events.ts`（`notifyTasksChanged` 单一通知点）、`main/ipc/handlers/task.ts`（按列表注册）、`ipc/validate.ts`（共用 `invalid()`）、preload 白名单 `api.task.*` / `api.on.taskChanged`；契约 20 例 + 服务层真库 15 例
   - S3 落地：`shared/utils/task-due-label.ts`（截止 chip 纯逻辑，9 例单测）、`shared/i18n/format.ts` 补 `formatDayOffset`、`event:quick-add-focus` 通道 + preload 订阅 + 主进程 `expandPanelForQuickAdd()`、全局快捷键 `Ctrl+Shift+N`、面板 `store.ts` 任务分片 + `quick-add.tsx` / `task-row.tsx` / `task-list.tsx`（App.tsx 由 M0 演示壳改为收件箱）、中英双语 `tasks.json` 新键、`scripts/smoke-tasks.mjs`（12 项断言）
@@ -21,6 +21,9 @@
   - S5 落地：`shared/utils/sort-order.ts`（`moveWithin` 越界夹取 / 无变化即原数组返回、`landingIndex` 按行中点定落点、`dropEdge` 画落点线，8 组单测）、`store.ts` 加 `moveTask`（走既有 `task:reorder`，写入后仍靠 `event:task-changed` 重取，不本地改序）、`task-list.tsx` 用 **pointer 拖拽**（抓手 `pointerdown` 时量一次各行的 band，`setPointerCapture` 收后续事件，拖动中只给被拖那一行写 `translateY`）、`task-row.tsx` 加抓手与 `Alt+↑/↓`、列表按 `useCallback` + `memo` 收敛拖动时的重渲染、中英 `tasks.json` 加 `row.dragHandle`
   - S5 的三处判断：① 不用 HTML5 `draggable`——幽灵图是整行的位图、落在透明无边框窗口上观感差，落点判断仍要自己写，且会吞掉行内控件需要的点击；改用 M01 已验证的 pointer 方案，风险表那一行随之作废。② `reorderTasks` 允许 `ids` 是**子集**（面板只发它画出来的那些行），仓储层把未点名的行按原序排到末尾，`sort_order` 因此在整组内始终是干净的 `0…n-1`；只写被点名的行会让它们占住中间的位置、两行拿到同一个 `sort_order`，日后同时显示完成与未完成的视图就会画出不确定的顺序。③ 移动后由列表把焦点放回被移动的那一行——React 在顺序变化时会卸载并重挂该行，元素一卸载焦点就没了，不放回去第二次 `Alt+↓` 就落空
   - S5 的两处收窄：**跨清单拖拽推迟**到 M03——清单（`list_id` 的赋值口与清单视图）在 M02 里还不存在，现在写这条路径只会是没人能走通、也没人能验证的空壳；撤销（S7）与 `sort_order` 的关系也留到 S7 一起处理。`Alt+↑/↓` 每次只挪一格（不跨组），够键盘与自动化用
+  - S6 落地：`shared/utils/recurrence.ts`（`rrule` 之上的一层薄封装：`nextOccurrence` 两种模式、`isValidRule` 写入口校验；10 组 12 例单测，覆盖每天 / 工作日 / 每周 / 每月 31 号 / 2·29 跳四年 / DST 钟点 / 迟到只跳不补 / `COUNT`·`UNTIL` 用尽 / 非法规则不抛）、`shared/utils/task-tree.ts`（`n/m` 汇总与"全做完"，4 例单测）、`repositories/tasks.ts` 的 `subtaskCounts`（一次 `GROUP BY parent_id` 取一串父行的汇总）、`services/tasks.ts` 的 `listTasks` 同时带上 tags 与 subtasks（每行都要画，分成两次读等于每次输入都多付一次往返）、`updateTaskFromPatch` 换成返回 `{ task, next, change }` 并在勾选完成时建下一次、`contracts/task.ts` 把 `repeatRule` 收到 `min(1).max(1000).refine(isValidRule)`、`preload` 的查询返回类型改 `TaskListItem`、面板 `store.ts` 加子任务分片（`refreshSubtasks` / `addSubtask` / `removeSubtask`）、`repeat-presets.ts`（纯数据，面板不 import `rrule`）、`task-detail.tsx` 加「重复」与「子任务」两区、`task-row.tsx` 加 `n/m` chip、中英 `tasks.json` 13 个新键、`smoke-tasks.mjs` 加两张清单（phase 4d 与 phase 6）
+  - S6 的三处判断：① 规则解析必须**先设 `dtstart` 再构造 `RRule`**——构造器是从它拿到的 start 推导钟点（`timeset` / `byhour` / `byminute`），先构造再把 `dtstart` 替换回去，规则会一直按默认 start 的钟点触发；② `rrule` 不坚持 `FREQ`，`COUNT=5` 单独一个会静默变成年度规则，因此 `build()` 先守着 `FREQ=` 再解析；③ 子任务输入框放在清单**下方**——放上面的话，加一条就会把光标所在的那个框往下推，连续录入时面板会在用户手底下滚动
+  - S6 的两处收窄：**没有新迁移**——`repeat_rule` / `repeat_mode` 在 0001 建表时就有（M02 只需 `remind_lead_min` 一个新列，S1 已加）；**重复只支持"完成即生成下一次"**，不做"提前 N 天展开多条未来实例"——那需要 `reminders` 那样的独立实例表，属于 M04 提醒模块的活；子任务进度汇总按行带出（`subtasks: { total, done }`），不做无限层级
 - **范围**：[FEATURES.md](FEATURES.md) 的 M02（**不含**自然语言解析，属 P1 且依赖 M06 的语种词表）
 - **前置**：M01 已完成（标记窗口、拖拽、吸附、贴边隐藏、面板形态、状态推送）
 - **约定**：中文文档；英文提交信息与代码注释；每个切片独立提交、独立验证
@@ -141,8 +144,8 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 | 区域 | 内容 | 依据 |
 |---|---|---|
 | 快速新增 | 单行输入，`Enter` 建任务并保持焦点继续输入；由 `Ctrl+Shift+N` 从任意位置唤起（快捷键文案已在 `tasks.json` 的 `inbox.empty` 里预告） | FEATURES M02 P0 |
-| 列表 | 复选圆钮（完成）/ 标题 / 截止 chip / 优先级标 / 标签 chip；子任务缩进一层，父行显示 `n/m`；空状态用已有 `inbox.empty` | — |
-| 详情 | 全屏替换式（D6）：标题、备注、截止（含「仅日期 / 含时刻」开关 + 今天 / 明天 / 清除）、提前提醒分钟、优先级、状态、标签增删、软删按钮；`Esc` 返回。**S4 已交付这些**；所属清单等 M03 有清单可用时补，预估/实际耗时与子任务区、附件区分别等 S7、S6 | — |
+| 列表 | 复选圆钮（完成）/ 标题 / 截止 chip / 优先级标 / 标签 chip；子任务缩进一层，父行显示 `n/m`（**S6 已交付 `n/m` chip**）；空状态用已有 `inbox.empty` | — |
+| 详情 | 全屏替换式（D6）：标题、备注、截止（含「仅日期 / 含时刻」开关 + 今天 / 明天 / 清除）、提前提醒分钟、优先级、状态、标签增删、软删按钮；`Esc` 返回。**S4 已交付这些**；**S6 已交付**「重复」（5 个预设 + 自定义 RRULE 输入 + `fixed` / `after_completion` 两种模式）与「子任务」两区（清单 + `n/m` + 增删）；所属清单等 M03 有清单可用时补，预估/实际耗时与附件区等 S7 | — |
 | 排序 | 列表内拖拽（**S5 已交付**，用 M01 验证过的 pointer 方案而非 HTML5 `draggable`）+ 键盘替代 `Alt+↑/↓`（无鼠标可用，也让自动化可测）；跨清单拖拽等 M03 有清单视图后补 | FEATURES M02 P0 |
 | 批量 | 选择模式 + 底部操作条（改优先级 / 改日期 / 加标签 / 移清单 / 完成 / 删除） | P1 |
 | 撤销 | 回收站条样式 toast + `Ctrl+Z` | P1 |
@@ -158,8 +161,8 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 |---|---|
 | `shared/utils/task-query.ts` | 过滤对象 → SQL 片段 + 绑定参数（含 `deleted_at` 兜底、LIMIT 上限、排序白名单） |
 | `shared/utils/sort-order.ts` | **S5 已实现**：`moveWithin`（把一项移到另一位置，越界夹取，无变化时原数组返回）、`landingIndex`（按行中点把指针位置换算成落点序号）、`dropEdge`（落点线画在目标行的哪一边），8 组 12 例单测。**未做**：分数 rank、跨清单后继——D3 选了组内整数重排，用不上 |
-| `shared/utils/recurrence.ts` | RRULE 包装 + `nextOccurrence`：每天、工作日、每周、每月（31 号）、每年（2/29）、DST 边界、`after_completion` 模式 |
-| `shared/utils/task-tree.ts` | 一层限制校验、`n/m` 汇总 |
+| `shared/utils/recurrence.ts` | **S6 已实现**：`nextOccurrence`（`fixed` 锚在原到期、上界取 `max(due, now)` 所以迟到的只跳不补；`after_completion` 重锚在完成日但保留任务自己的钟点；日期型的落到本地零点）、`isValidRule`（写入口校验，非法规则一律拒绝）、`build`（先设 `dtstart` 再构造 `RRule`，并守着 `FREQ=`）。12 例单测 |
+| `shared/utils/task-tree.ts` | **S6 已实现**：`progressText`（`n/m`，空清单返回 `null`）、`allSubtasksDone`，4 例单测。**未做**：`taskTree()` 建树——一层子任务用 `queryTasks({ parentId })` 就够，「一层限制」的校验在仓储层（`assertTopLevelParent`） |
 | `shared/utils/task-dates.ts` | **S4 已实现**：存储实例 ↔ 日期/时刻控件值互转（非法日期拒绝而非进位）、今天/明天 = 本地零点、开关「含时刻」｜**未做**：本周末 / 下周 / 自定义偏移——等 S5 之后的日期选择器有真实落点再补 |
 | `main/services/undo.ts` | 逆操作栈（上限、覆盖的操作集、栈空返回 `ok(null)`） |
 | `shared/contracts/task.ts` | zod 边界：空标题、超长、优先级越界、非法 `dueAt`、两层子任务被拒 |
@@ -176,11 +179,11 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 | **S3 列表与快速新增** | 面板真实列表 + 快速新增 + 全局快捷键 + 空状态 | 冒烟：键盘输入标题回车 → 断言任务出现且刷新后仍在（重启后仍在 = 落库） |
 | **S4 详情与字段编辑 ✅** | 全屏详情、全部基础字段、即时保存（D9）、`Esc` 返回 | 冒烟：改优先级/截止 → 断言列表 chip 变化且重启后一致（24/24 实测通过） |
 | **S5 排序与拖拽 ✅** | 组内 DnD（pointer）+ `Alt+↑/↓`；跨清单推迟到 M03 | 冒烟：`Alt+↓` → 断言列表重画成新顺序且焦点仍在被移动的行 → `Alt+↑` 复位 → 抓抓手拖到下一行下方 → 断言落库顺序；重启后顺序不变（`sort_order` 子集重排 + 焦点保持 + 合成拖拽共 29/29 实测通过） |
-| **S6 子任务与重复** | 一层子任务 + `n/m`；重复预设 + 自定义；完成后生成下一次到期 | RRULE 单测；冒烟：钩上「每天」完成任务 → 断言下一次到期出现在明天 |
+| **S6 子任务与重复 ✅** | 一层子任务 + `n/m`；重复预设 + 自定义；完成后生成下一次到期 | RRULE 单测（12 例）+ 服务层真库用例（勾选生成下一次、`after_completion` 重锚、`COUNT` 用尽不生成、新实例无子任务）；冒烟：在详情里录一条子任务（断言 `parentId` 指向父行且光标留在输入框）→ 点「每天」断言库里存上 `FREQ=DAILY` → `Esc` 后从 DOM 读父行的 `0/1` chip → **重启后**打开这条重复任务勾选完成 → 断言一次写入报出两行、顶层从 2 行变 3 行、新行是 `todo` / `FREQ=DAILY` / 到期为后天本地零点 / 无子任务 → `Esc` 后断言列表把新实例画在已完成那行的位置上（`Esc` 之后才读列表：详情打开时屏幕上就没有列表） |
 | **S7 P1 收尾** | 撤销 + 批量 + 附件 | 冒烟：删除 → `Ctrl+Z` → 断言回来；批量改优先级 |
 | **S8（可选，M01 收尾）** | 右键菜单（快速新增 / 今天 / 设置 / 暂停提醒 / 退出）——S3 之后「快速新增」已有落点 | 冒烟：右键 → 断言菜单与首项行为 |
 
-S0–S5 已全部过门，主干可交付「能记事、能改、能排序」；S6 补齐 P0 剩余；S7/S8 已按拍板范围一并做。
+S0–S6 已全部过门，主干可交付「能记事、能改、能排序、能拆清单、能重复」——M02 的 P0 已全部落地；S7/S8 已按拍板范围一并做。
 
 ---
 
@@ -193,6 +196,7 @@ S0–S5 已全部过门，主干可交付「能记事、能改、能排序」；
 - **冒烟里的输入只有快捷键走 OS**：S3 曾用 `WM_CHAR` 把标题直投面板窗口以绕开输入法的组合态；S4 起改为通过 DevTools 协议把按键直接送进渲染进程，输入法与输入队列都不再参与，只有打开面板的全局快捷键仍必须来自真实输入（`RegisterHotKey` 只对输入队列产生的事件生效）
 - **冒烟里的控件定位走 DevTools 协议**（S4 起）：脚本按 `data-field` 名直接设焦点，不再靠数 Tab 次数。数次数的那版是坏的：Chromium 只在窗口持有前台时才认 Tab 这类焦点移动，脚本拿不到前台，于是 Tab 不改变焦点而按次数照按，随后的回车就落到别的控件上
 - **冒烟里的拖拽是合成鼠标事件**（S5 起）：`Input.dispatchMouseEvent` 的 press/move/release 会被 Chromium 转成 pointer 事件，于是面板自己的 pointer 处理链（含 `setPointerCapture`）真的跑一遍——不需要真鼠标，也不需要前台；坐标取自页面自己的矩形，因此脚本不必知道窗口在屏幕上的位置
+- **冒烟里的列表只在自己上屏时才报**（S6 发现）：`tasks-rendered` 由列表组件上报，而详情打开时 App 画的是详情、列表根本没挂载，所以勾完任务要先 `Esc` 回列表才能读到它画了什么；同理 `readTasks()` 默认只取顶层（`parent_id IS NULL`）——`sort_order` 是**组内**序号，把父子两组合在一起按它排序会让两组互相插序，第一版就是因此在加了子任务之后读错行
 - **手动验收**（我会自己操控电脑跑一遍）：中文输入法下回车建任务、DPI 150%、约 500 条任务的滚动流畅度、多显示器上面板贴边
 - **性能取舍**：本轮**不做列表虚拟化**——先用真实数据量测一次；只有当渲染明显掉帧才引入（避免为不存在的问题写复杂代码），结论写回 §9.7 性能预算
 
@@ -203,7 +207,8 @@ S0–S5 已全部过门，主干可交付「能记事、能改、能排序」；
 | 风险 | 影响 | 回退 |
 |---|---|---|
 | ~~HTML5 拖拽在无边框窗口表现异常~~ | 排序不可用 | **S5 未采用 HTML5 拖拽**，直接用 M01 已验证的 pointer 方案（`setPointerCapture` + 自己做落点预览），此风险排除 |
-| `rrule` 在 electron-vite 下 ESM/CJS 不兼容 | 重复功能延期 | 退到自研子集（D2 的 B），先只支持 5 个预设 |
+| ~~`rrule` 在 electron-vite 下 ESM/CJS 不兼容~~ | ~~重复功能延期~~ | **S6 已接入**：`rrule` 打进主进程 bundle，`typecheck` / `build` / 真库单测 / 冒烟全过，此风险排除（回退方案 B——自研子集只支持 5 个预设——未用上） |
+| 用户手打的自定义规则被静默接受（`rrule` 对 `FREQ=` 空值等是宽容的） | 任务存进去却永不重复 | **S6 已规避**：写入口 `isValidRule` 守着 `FREQ=` 并把两段解析都包在 try/catch 里，非法规则回 `VALIDATION_FAILED`；面板保留原文不清空，改的是错字而不是重打一遍 |
 | 面板失焦即收起与编辑冲突 | 内容丢失 | D9 即时保存已规避；若仍有边缘情况，再评估「详情打开时不因失焦收起」 |
 | 任务量增长后查询变慢 | 列表卡顿 | 先靠索引 + LIMIT + 实测定位；虚拟化留到有数据支撑时再做 |
 
