@@ -7,8 +7,10 @@ import type {
   MarkerStatePayload,
   PanelStatePayload,
 } from '@shared/contracts/channels';
+import type { TaskCreateInput, TaskChangedPayload, TaskPatchInput, TaskQueryInput } from '@shared/contracts/task';
 import type { AppSettings } from '@shared/contracts/settings';
 import type { BootParams, MarkerAnchor } from '@shared/types/app';
+import type { ReorderScope, TaskWithTags } from '@shared/types/task';
 import type { IpcResult } from '@shared/types/ipc';
 
 /**
@@ -40,6 +42,18 @@ const api = {
     get: (key: string) => invoke<AppSettings | string | number | null>(IPC.settings.get, { key }),
     set: (patch: Partial<AppSettings>) => invoke<AppSettings>(IPC.settings.set, patch),
   },
+  task: {
+    /** Filter fields mirror `TaskFilter`; the main process clamps the row window. */
+    query: (filter: TaskQueryInput = {}) => invoke<TaskWithTags[]>(IPC.task.query, filter),
+    create: (input: TaskCreateInput) => invoke<TaskWithTags>(IPC.task.create, input),
+    update: (id: string, patch: TaskPatchInput) =>
+      invoke<TaskWithTags>(IPC.task.update, { id, patch }),
+    /** Soft delete — the rows go to the recycle bin and `restore` brings them back. */
+    delete: (ids: string[]) => invoke<{ affected: number }>(IPC.task.delete, { ids }),
+    restore: (ids: string[]) => invoke<{ affected: number }>(IPC.task.restore, { ids }),
+    reorder: (scope: ReorderScope, ids: string[]) =>
+      invoke<{ affected: number }>(IPC.task.reorder, { scope, ids }),
+  },
   i18n: {
     setLocale: (locale: string) => invoke<string>(IPC.i18n.setLocale, { locale }),
   },
@@ -61,6 +75,12 @@ const api = {
       subscribe(IPC.event.markerAnchorChanged, listener),
     markerState: (listener: (payload: MarkerStatePayload) => void) =>
       subscribe(IPC.event.markerState, listener),
+    /**
+     * A task write happened; the payload says what and which ids, never the rows
+     * (M02 D4). The panel re-fetches whatever query it has open.
+     */
+    taskChanged: (listener: (payload: TaskChangedPayload) => void) =>
+      subscribe(IPC.event.taskChanged, listener),
   },
 } as const;
 

@@ -56,4 +56,14 @@
 - `repositories/attachments.ts`：只存文件路径引用，不复制文件
 - 测试：`tasks.test.ts` 扩到 27 例、新增 `tags.test.ts`（6 例）与 `attachments.test.ts`（5 例），全部在真 SQLite 临时库上跑；`id.test.ts` 与 `task-query.test.ts` 覆盖纯逻辑，共 107 例
 
+#### S2 IPC
+
+- `shared/contracts/task.ts`：任务域的 zod 契约（创建 / 补丁 / 查询 / 重排 / id 列表），`undefined` = 不动该字段、`null` = 清空该列，使「每次改动即时保存」只带一个字段即可
+- 通道与事件：`task:query` / `task:create` / `task:update` / `task:delete` / `task:restore` / `task:reorder` 与 `event:task-changed`；preload 白名单同步暴露 `api.task.*` 与 `api.on.taskChanged`
+- `main/services/tasks.ts`：任务域服务层，**不 import electron**，因此每条规则都能在真库上单测；每次写入同时返回「改了什么」的描述
+- `main/services/task-events.ts`：`notifyTasksChanged()` 是唯一通知点——推标记角标 / 进度环，并把「已变更」描述广播给**面板窗口**（不发给标记窗口，它不订阅且应当保持空闲）
+- `main/ipc/handlers/task.ts`：任务通道以列表形式注册，注册器仍是唯一入口（校验 + 异常兜底 + 值返回错误模型）；`ipc/validate.ts` 抽出共用的 `invalid()`，注册器与新 handler 的拒绝形状与日志保持一致
+- 测试：契约边界 20 例（空 / 超长标题、优先级越界、非整数时间戳、空状态集、未知排序、窗口上限）+ 服务层真库 15 例（标签随行返回、软删计数含子任务、恢复、重排回显 scope、两层子任务被拒），共 142 例
+- 收窄：附件通道（S7）与 `event:quick-add-focus`（S3）本片未加，避免暴露无人应答的通道；S2 计划里的「建 → 事件 → 角标 +1」冒烟断言移至 S3——面板此刻还没有可输入的真实列表，而冒烟态角标是固定的桩值
+
 [Unreleased]: https://github.com/2268027569/DoList/commits/main

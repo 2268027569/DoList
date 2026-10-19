@@ -7,9 +7,11 @@
 > verified.
 
 - **状态**：已确认（2026-10-19）——D2 用 `rrule` 库、D6 全屏替换式、S7/S8 本轮一并做完
-- **进度**：S0 ✅ 测试地基 → **S1 ✅ 数据层（2026-10-19）** → 下一片 S2 IPC
+- **进度**：S0 ✅ 测试地基 → S1 ✅ 数据层 → **S2 ✅ IPC（2026-10-19）** → 下一片 S3 列表与快速新增
   - S1 落地：迁移 `0002_task_fields.sql`（加 `remind_lead_min`）、`shared/types/task.ts`、`shared/utils/id.ts`（UUID v7）、`shared/utils/task-query.ts`（过滤 → SQL + 排序白名单）、`repositories/tasks.ts`（增删改查 / 软删级联 / 恢复 / 重排）、`repositories/tags.ts`、`repositories/attachments.ts`；不变量见 ARCHITECTURE §5.1，真库用例 30 例
+  - S2 落地：`shared/contracts/task.ts`（zod 契约）、`channels.ts` 的 6 条任务通道 + `event:task-changed`、`main/services/tasks.ts`（域服务，不 import electron）、`main/services/task-events.ts`（`notifyTasksChanged` 单一通知点）、`main/ipc/handlers/task.ts`（按列表注册）、`ipc/validate.ts`（共用 `invalid()`）、preload 白名单 `api.task.*` / `api.on.taskChanged`；契约 20 例 + 服务层真库 15 例
   - S1 的两处收窄：`repositories/lists.ts` 与 `taskTree()` 未建——`list_id = NULL` 就是收件箱、`queryTasks({ parentId })` 已覆盖一层子任务读取，等 M03 有真实消费者再补，避免留空壳
+  - S2 的两处收窄：附件通道推到 S7（契约表里本就有）、`event:quick-add-focus` 推到 S3；计划里 S2 的「建 → 事件 → 角标 +1」冒烟断言移到 S3（面板尚无真实列表可输入，且冒烟态角标是桩值）
 - **范围**：[FEATURES.md](FEATURES.md) 的 M02（**不含**自然语言解析，属 P1 且依赖 M06 的语种词表）
 - **前置**：M01 已完成（标记窗口、拖拽、吸附、贴边隐藏、面板形态、状态推送）
 - **约定**：中文文档；英文提交信息与代码注释；每个切片独立提交、独立验证

@@ -328,19 +328,33 @@ type IpcErrorCode =
 
 ### 6.4 校验与暴露边界
 
+契约的实现位置是 `src/shared/contracts/`（`channels.ts` 通道常量 + 各域 schema），主进程与 preload 共用同一份：
+
 ```ts
-// src/shared/contracts/task.ts
-export const createTaskInput = z.object({
-  title: z.string().trim().min(1).max(500),
-  listId: z.string().uuid().optional(),
-  priority: z.number().int().min(0).max(3).default(0),
-  dueAt: z.number().int().nullable().optional(),
-  tags: z.array(z.string().uuid()).max(20).default([]),
+// src/shared/contracts/task.ts（节选，M02 S2 落地）
+const title = z.string().trim().min(1).max(500);           // 先 trim 再 min，空白标题在入口被拒
+const priority = z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]);
+
+export const taskCreateInput = z.object({
+  title,
+  listId: z.string().min(1).max(128).nullable().optional(),   // null = 收件箱
+  parentId: z.string().min(1).max(128).nullable().optional(), // null = 顶层
+  notes: z.string().max(20_000).nullable().optional(),
+  priority: priority.optional(),
+  dueAt: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).nullable().optional(),
+  dueHasTime: z.boolean().optional(),
+  repeatRule: z.string().min(1).max(1_000).nullable().optional(),
+  repeatMode: z.enum(REPEAT_MODES).nullable().optional(),
+  estimateMin: minuteCount.nullable().optional(),
+  remindLeadMin: minuteCount.nullable().optional(),
+  tags: z.array(z.string().trim().min(1).max(64)).max(50).optional(),
 });
-export type CreateTaskInput = z.infer<typeof createTaskInput>;
 ```
 
-- 每个 handler 的第一行是 `schema.parse(payload)`，**主进程不信渲染层的任何输入**。
+- **`undefined` 与 `null` 语义不同**：`undefined` = 不动该字段，`null` = 清空该列。补丁因此在「每次改动即时保存」下可以只带一个字段（M02 D9、§5.2 的 `TaskPatch`）。
+- 与早先草案的两处差异：`listId` / `parentId` 用**有界标识符**而非 `z.string().uuid()`（id 由本项目的 UUID v7 生成，不接受任意 uuid 版本）；`tags` 传的是**标签名**而非标签 id（`tags.name` 已是 UNIQUE，主进程按名去重创建，M02 §4）。
+- 任务通道：`task:query` / `task:create` / `task:update` / `task:delete` / `task:restore` / `task:reorder`，事件 `event:task-changed`。一次写入恰好一次通知，通知只发面板窗口（`services/task-events.ts`）。
+- 每个 handler 的第一行是 `schema.safeParse(payload)`，**主进程不信渲染层的任何输入**；注册器与各域 handler 共用 `ipc/validate.ts` 的 `invalid()`，保证拒绝形状与日志一致。
 - preload 通过 `contextBridge.exposeInMainWorld('api', ...)` 只暴露白名单方法（`window.api.task.create(...)`），**不暴露 `ipcRenderer` 本体**，渲染层无法发送任意通道。
 - 渲染层不接触 `fs` / `path` / `db`，所有文件操作在主进程完成。
 - 主进程侧对来自 `yichen-todo://` 协议、剪贴板、拖放、导入文件的数据套同一批 schema。

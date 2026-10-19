@@ -44,6 +44,16 @@ export const IPC = {
     get: 'settings:get',
     set: 'settings:set',
   },
+  task: {
+    /** Renderer -> main: fetch the tasks a filter selects. The main process owns the query. */
+    query: 'task:query',
+    create: 'task:create',
+    update: 'task:update',
+    /** Soft delete: the rows move to the recycle bin, they are not dropped. */
+    delete: 'task:delete',
+    restore: 'task:restore',
+    reorder: 'task:reorder',
+  },
   i18n: {
     setLocale: 'i18n:set-locale',
   },
@@ -58,6 +68,12 @@ export const IPC = {
     markerAnchorChanged: 'event:marker-anchor-changed',
     /** Main -> marker: appearance plus the counts the badge / ring should show. */
     markerState: 'event:marker-state',
+    /**
+     * Main -> panel: tasks changed, so re-fetch the open query. Carries a
+     * description rather than the rows themselves — the main process is the only
+     * source of truth and a mirrored list would drift (§6.2, M02 D4).
+     */
+    taskChanged: 'event:task-changed',
   },
 } as const;
 

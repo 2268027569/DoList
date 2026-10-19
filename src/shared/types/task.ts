@@ -45,6 +45,14 @@ export interface Task {
   deletedAt: number | null;
 }
 
+/**
+ * A task together with its tag names. The list and the detail both render tags,
+ * and reading them alongside the rows avoids a second round trip per render.
+ */
+export interface TaskWithTags extends Task {
+  tags: string[];
+}
+
 /** Fields a create call may set. Everything else takes its schema default. */
 export interface TaskDraft {
   title: string;
