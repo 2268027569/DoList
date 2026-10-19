@@ -74,6 +74,12 @@ export const IPC = {
      * source of truth and a mirrored list would drift (§6.2, M02 D4).
      */
     taskChanged: 'event:task-changed',
+    /**
+     * Main -> panel: the quick-add shortcut opened the panel, so its field should
+     * take the caret. No payload — the panel focuses the one input it owns
+     * (M02-PLAN §6).
+     */
+    quickAddFocus: 'event:quick-add-focus',
   },
 } as const;
 

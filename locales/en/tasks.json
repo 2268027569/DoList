@@ -2,5 +2,11 @@
   "inbox.title": "Inbox",
   "inbox.empty": "Nothing here yet. Press Ctrl+Shift+N to add a task.",
   "quickAdd.placeholder": "Add a task and press Enter",
-  "summary.pending": "{count, plural, =0 {Nothing left for today} one {# task left today} other {# tasks left today}}"
+  "summary.pending": "{count, plural, =0 {Nothing left for today} one {# task left today} other {# tasks left today}}",
+  "list.loadFailed": "Tasks could not be loaded. They are still on disk — reopen the panel to retry.",
+  "priority.high": "High priority",
+  "priority.medium": "Medium priority",
+  "priority.low": "Low priority",
+  "row.markDone": "Mark done",
+  "row.markUndone": "Mark not done"
 }

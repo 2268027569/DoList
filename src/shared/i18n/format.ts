@@ -54,6 +54,18 @@ export function formatRelative(
   return formatter.format(Math.round(deltaSeconds), 'second');
 }
 
+/**
+ * Relative wording for a difference measured in whole days.
+ *
+ * `formatRelative` picks its unit from the magnitude, so a zero difference falls
+ * through to seconds and reads "now" — and a 39-hour gap rounds to "2 days ago".
+ * Neither is right for a task dated by its day, which is what this helper is for:
+ * it names the day ("today" / "tomorrow" / "yesterday" / "in 3 days").
+ */
+export function formatDayOffset(days: number, locale: string): string {
+  return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(days, 'day');
+}
+
 export function formatNumber(
   value: number,
   locale: string,

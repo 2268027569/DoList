@@ -2,7 +2,6 @@ import { BrowserWindow, screen } from 'electron';
 import { join } from 'node:path';
 
 import { IPC } from '@shared/contracts/channels';
-import type { PanelStatePayload } from '@shared/contracts/channels';
 import { panelSizeOf } from '@shared/contracts/settings';
 import { TRANSPARENT_WINDOW_BACKGROUND } from '@shared/theme/window-background';
 import type { BootParams, PanelState } from '@shared/types/app';
@@ -117,10 +116,27 @@ export function expandPanel(): PanelState {
 
   panelState = 'shown';
   setMarkerPanelVisible(true);
-  send({ state: 'expanding', durationMs: EXPAND_DURATION_MS });
+  sendToPanel(IPC.event.panelState, { state: 'expanding', durationMs: EXPAND_DURATION_MS });
+  // Under the harness the caret always goes to quick-add, so a keyboard run can
+  // create a task without first aiming at the field. A real run only does that on
+  // the quick-add shortcut below — a plain click should let the user browse.
+  if (isSmokeEnabled()) sendToPanel(IPC.event.quickAddFocus, null);
   log('panel expanded', { markerBounds, panelBounds: window.getBounds() });
   smokeRecord('panel-expanded', { panelBounds: window.getBounds() });
   return panelState;
+}
+
+/**
+ * The quick-add shortcut (M02-PLAN §6): open the panel and hand the caret to its
+ * field. Unlike `togglePanel` it never closes the panel — pressing the shortcut
+ * while browsing should ask to add a task, not hide the window.
+ */
+export function expandPanelForQuickAdd(): PanelState {
+  const state = expandPanel();
+  // The panel renderer is mounted from boot (the window is created hidden at
+  // startup), so the event lands whether or not this is the first open.
+  sendToPanel(IPC.event.quickAddFocus, null);
+  return state;
 }
 
 export function collapsePanel(): void {
@@ -132,7 +148,7 @@ export function collapsePanel(): void {
   if (panelState === 'collapsing') return;
 
   panelState = 'collapsing';
-  send({ state: 'collapsing', durationMs: COLLAPSE_DURATION_MS });
+  sendToPanel(IPC.event.panelState, { state: 'collapsing', durationMs: COLLAPSE_DURATION_MS });
   cancelFallback();
   fallbackTimer = setTimeout(() => {
     log('collapse animation was not acknowledged, hiding anyway');
@@ -242,8 +258,8 @@ function cancelFallback(): void {
   fallbackTimer = null;
 }
 
-function send(payload: PanelStatePayload): void {
+function sendToPanel(channel: string, payload: unknown): void {
   const window = panelWindow;
   if (window === null || window.isDestroyed()) return;
-  window.webContents.send(IPC.event.panelState, payload);
+  window.webContents.send(channel, payload);
 }

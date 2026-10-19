@@ -1,8 +1,10 @@
 import { IPC } from '@shared/contracts/channels';
 import type { TaskChangedPayload } from '@shared/contracts/task';
 
+import { isSmokeEnabled, smokeRecord } from '../platform/smoke';
 import { pushMarkerState } from '../windows/marker';
 import { getPanelWindow } from '../windows/panel';
+import { currentMarkerState } from './marker-state';
 
 /**
  * The single notification point for every task write (§6.2, M02 §5).
@@ -18,6 +20,14 @@ import { getPanelWindow } from '../windows/panel';
  */
 export function notifyTasksChanged(change: TaskChangedPayload): void {
   pushMarkerState();
+
+  // The state sent under the harness is a fixed stub — the marker's drawing path
+  // has to be observable on an empty database — so the badge this write actually
+  // recomputed is published beside it. That is what lets a smoke run assert the
+  // count moved, rather than asserting the stub it was handed.
+  if (isSmokeEnabled()) {
+    smokeRecord('task-changed', { ...change, badge: currentMarkerState().badge });
+  }
 
   const panel = getPanelWindow();
   if (panel === null || panel.isDestroyed()) return;

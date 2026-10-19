@@ -33,6 +33,7 @@
     "i18n:check": "node scripts/i18n-check.mjs",
     "icons": "node scripts/make-icons.mjs",
     "smoke:marker": "node scripts/smoke-marker-input.mjs",
+    "smoke:tasks": "node scripts/smoke-tasks.mjs",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {

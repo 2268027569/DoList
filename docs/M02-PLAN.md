@@ -7,11 +7,14 @@
 > verified.
 
 - **状态**：已确认（2026-10-19）——D2 用 `rrule` 库、D6 全屏替换式、S7/S8 本轮一并做完
-- **进度**：S0 ✅ 测试地基 → S1 ✅ 数据层 → **S2 ✅ IPC（2026-10-19）** → 下一片 S3 列表与快速新增
+- **进度**：S0 ✅ 测试地基 → S1 ✅ 数据层 → S2 ✅ IPC → **S3 ✅ 列表与快速新增（2026-10-19）** → 下一片 S4 详情与字段编辑
   - S1 落地：迁移 `0002_task_fields.sql`（加 `remind_lead_min`）、`shared/types/task.ts`、`shared/utils/id.ts`（UUID v7）、`shared/utils/task-query.ts`（过滤 → SQL + 排序白名单）、`repositories/tasks.ts`（增删改查 / 软删级联 / 恢复 / 重排）、`repositories/tags.ts`、`repositories/attachments.ts`；不变量见 ARCHITECTURE §5.1，真库用例 30 例
   - S2 落地：`shared/contracts/task.ts`（zod 契约）、`channels.ts` 的 6 条任务通道 + `event:task-changed`、`main/services/tasks.ts`（域服务，不 import electron）、`main/services/task-events.ts`（`notifyTasksChanged` 单一通知点）、`main/ipc/handlers/task.ts`（按列表注册）、`ipc/validate.ts`（共用 `invalid()`）、preload 白名单 `api.task.*` / `api.on.taskChanged`；契约 20 例 + 服务层真库 15 例
+  - S3 落地：`shared/utils/task-due-label.ts`（截止 chip 纯逻辑，9 例单测）、`shared/i18n/format.ts` 补 `formatDayOffset`、`event:quick-add-focus` 通道 + preload 订阅 + 主进程 `expandPanelForQuickAdd()`、全局快捷键 `Ctrl+Shift+N`、面板 `store.ts` 任务分片 + `quick-add.tsx` / `task-row.tsx` / `task-list.tsx`（App.tsx 由 M0 演示壳改为收件箱）、中英双语 `tasks.json` 新键、`scripts/smoke-tasks.mjs`（12 项断言）
   - S1 的两处收窄：`repositories/lists.ts` 与 `taskTree()` 未建——`list_id = NULL` 就是收件箱、`queryTasks({ parentId })` 已覆盖一层子任务读取，等 M03 有真实消费者再补，避免留空壳
   - S2 的两处收窄：附件通道推到 S7（契约表里本就有）、`event:quick-add-focus` 推到 S3；计划里 S2 的「建 → 事件 → 角标 +1」冒烟断言移到 S3（面板尚无真实列表可输入，且冒烟态角标是桩值）
+  - S3 的三处收窄：列表选中集与详情目标（S4 才有人用）、标签 chip 与子任务 `n/m`（S6 的行结构）、拖拽排序（S5）都还没进 `store.ts`；任务行只画「复选圆钮 / 标题 / 截止 chip / 优先级标」，够 S3 的验收，不预埋空壳
+  - S3 补回的断言：`smoke-tasks` 覆盖「空库首绘 → 快捷键开面板并把光标交给输入框 → 投递标题 + 回车建任务 → `task-changed`（含主进程实算角标 0→1）→ 面板重取重绘 → 直读 SQLite 校验落库与默认值」，并把第二条任务与「回车后焦点仍在」一并验证
 - **范围**：[FEATURES.md](FEATURES.md) 的 M02（**不含**自然语言解析，属 P1 且依赖 M06 的语种词表）
 - **前置**：M01 已完成（标记窗口、拖拽、吸附、贴边隐藏、面板形态、状态推送）
 - **约定**：中文文档；英文提交信息与代码注释；每个切片独立提交、独立验证
@@ -119,7 +122,7 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 | `task:undo` | — | 撤销栈弹栈（D7） |
 | `attachment:add` / `:remove` / `:open` | `{ taskId }` / `{ id }` | 主进程用 `dialog` 与 `shell.openPath`，渲染层不碰 `fs` |
 | `event:task-changed` | `{ kind, ids[], scope? }` | 单向广播，渲染层据此重取（D4） |
-| `event:todo-focus-quick-add` | — | 全局快捷键展开面板后聚焦输入框 |
+| `event:quick-add-focus` | — | 全局快捷键展开面板后聚焦输入框（S3 落地时定名，只发给面板窗口） |
 
 - 每个 handler 第一行 `schema.safeParse`，失败返回 `VALIDATION_FAILED`（沿用现有注册器模型）
 - `register.ts` 只保留注册骨架，任务域拆到 `ipc/handlers/task.ts`，与 §2 的目录规划一致
@@ -181,6 +184,7 @@ S0–S4 是主干（P0 可用即可交付「能记事了」）；S5–S6 补齐 
 - **仓储层走真库单测**：D1 实测确认 `better-sqlite3` 是 Node-API 模块（ABI 无关），仓储层与迁移链可以直接在 Vitest 里用临时库验证，不必只靠 E2E
 - **冒烟**：新增 `npm run smoke:tasks`，沿用「真实系统输入 + `status.json` 事件流」的既有模式；断言点写到事件里，失败信息给出期望值
 - **可重复性**：冒烟用独立数据库文件，跑前删库 → 同一断言集可反复跑
+- **冒烟里的文本输入不走 OS 输入队列**：`smoke-tasks` 把标题以 `WM_CHAR` 直接投到面板窗口。走 `SendInput` 时，机器上处于组合态的输入法（TSF 系，`ImmAssociateContext` 管不到）会把首条标题组合成别的字，断言就变成在测那台机器的输入法；直投窗口同时免掉了「控制台把前台抢回去、面板随即失焦收起」这条噪声。快捷键仍走真实键盘：`RegisterHotKey` 只对来自输入队列的事件生效
 - **手动验收**（我会自己操控电脑跑一遍）：中文输入法下回车建任务、DPI 150%、约 500 条任务的滚动流畅度、多显示器上面板贴边
 - **性能取舍**：本轮**不做列表虚拟化**——先用真实数据量测一次；只有当渲染明显掉帧才引入（避免为不存在的问题写复杂代码），结论写回 §9.7 性能预算
 

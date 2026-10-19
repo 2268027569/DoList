@@ -81,6 +81,8 @@ const api = {
      */
     taskChanged: (listener: (payload: TaskChangedPayload) => void) =>
       subscribe(IPC.event.taskChanged, listener),
+    /** The quick-add shortcut opened the panel: take the caret in its field. */
+    quickAddFocus: (listener: () => void) => subscribe(IPC.event.quickAddFocus, listener),
   },
 } as const;
 

@@ -2,6 +2,5 @@
   "app.name": "YiChen ToDo",
   "action.openPanel": "展开面板",
   "action.quit": "退出",
-  "marker.tooltip": "单击展开 · 拖动调整位置",
-  "panel.demo.notice": "脚手架版本 — 任务数据将随 M02 落地。"
+  "marker.tooltip": "单击展开 · 拖动调整位置"
 }

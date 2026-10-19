@@ -66,4 +66,15 @@
 - 测试：契约边界 20 例（空 / 超长标题、优先级越界、非整数时间戳、空状态集、未知排序、窗口上限）+ 服务层真库 15 例（标签随行返回、软删计数含子任务、恢复、重排回显 scope、两层子任务被拒），共 142 例
 - 收窄：附件通道（S7）与 `event:quick-add-focus`（S3）本片未加，避免暴露无人应答的通道；S2 计划里的「建 → 事件 → 角标 +1」冒烟断言移至 S3——面板此刻还没有可输入的真实列表，而冒烟态角标是固定的桩值
 
+#### S3 列表与快速新增
+
+- 面板换成真正的收件箱：M0 的设置演示壳退役，[App.tsx](file:///c:/Users/Administrator/Desktop/toDoList/src/renderer/panel/src/App.tsx) 头部显示标题与「今天还有 # 项待办」，下面是快速新增与可滚动的任务列表
+- [store.ts](file:///c:/Users/Administrator/Desktop/toDoList/src/renderer/panel/src/store.ts)：任务分片只存来自查询的结果，**不存派生数据**；`addTask` / `toggleTask` 写完不本地插入，只等 `event:task-changed` 重取（D4 的「一次写入 = 一次重取」）
+- 任务行 [task-row.tsx](file:///c:/Users/Administrator/Desktop/toDoList/src/renderer/panel/src/task-row.tsx)：复选圆钮（`role="checkbox"` + `aria-checked`，带「标记为已完成 / 未完成」的无障碍名）、标题、截止 chip、优先级标；chip 的配色走运行时令牌名（模板类名 Tailwind 认不出来），因此用内联 `style` 而不是硬编码色值
+- 快速新增 [quick-add.tsx](file:///c:/Users/Administrator/Desktop/toDoList/src/renderer/panel/src/quick-add.tsx)：`Enter` 建任务并**保持焦点**继续输入；空标题不建也不吃掉已输入的空白；写失败把文本退回而不是丢掉
+- 截止 chip 的判定抽成纯逻辑 [task-due-label.ts](file:///c:/Users/Administrator/Desktop/toDoList/src/shared/utils/task-due-label.ts)（逾期 / 今天 / 更晚），按「天起点」而不是毫秒差算天数，免掉「39 小时被算成 2 天」；9 例单测覆盖仅日期不判逾期、带时刻按瞬时判定、跨天回落日期、`zh-Hans` 输出
+- 唤起路径：新增 `event:quick-add-focus` 通道与 preload 白名单订阅，主进程 `expandPanelForQuickAdd()` 展开面板并把光标交给输入框；全局快捷键注册 `Ctrl/Cmd+Shift+N`（与既有的 `Ctrl/Cmd+Shift+Space` 并存）
+- 新增冒烟 `npm run smoke:tasks`（12 项断言）：空库首绘 → 真实全局快捷键开面板 → 光标落到输入框 → 投递标题 + 回车 → `task-changed`（含主进程实算角标 `0 → 1`，不再是桩值）→ 面板重取重绘 → 直读 SQLite 校验落库与默认值（`todo` / 无清单 / 顶级）；再建第二条验证回车后焦点仍在
+- 冒烟把标题以 `WM_CHAR` **直投面板窗口**而不是走 `SendInput`：机器上的 TSF 系输入法会把注入字符组合成中文，断言会变成在测那台机器的输入法。代价是不能用「注入点击」把面板抬到前台——注入点击借来的前台会被注入它的控制台抢回，面板据此判定失焦并收起，于是这条路径改为完全不碰光标
+
 [Unreleased]: https://github.com/2268027569/DoList/commits/main

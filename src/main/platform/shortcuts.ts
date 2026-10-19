@@ -1,16 +1,19 @@
 import { globalShortcut } from 'electron';
 
 import { createLogger } from '../logger';
-import { togglePanel } from '../windows/panel';
+import { expandPanelForQuickAdd, togglePanel } from '../windows/panel';
 
 const log = createLogger('platform/shortcuts');
 
 /**
- * Default: Ctrl/Cmd+Shift+Space toggles the panel (docs/ARCHITECTURE.md §14,
- * open question 5). The quick-add shortcut arrives with M02.
+ * Defaults: Ctrl/Cmd+Shift+Space toggles the panel, Ctrl/Cmd+Shift+N opens it with
+ * the caret already in the quick-add field (docs/ARCHITECTURE.md §14, open question
+ * 5; M02-PLAN §6). Both are user-configurable with conflict detection in M09 — until
+ * then a rejected accelerator is logged rather than surfaced.
  */
 export function registerShortcuts(): void {
   register('CommandOrControl+Shift+Space', () => togglePanel());
+  register('CommandOrControl+Shift+N', () => expandPanelForQuickAdd());
 }
 
 export function unregisterShortcuts(): void {
