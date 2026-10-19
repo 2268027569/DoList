@@ -4,6 +4,13 @@ import type { MarkerAnchor, MarkerEdge, Rect } from '../types/app';
 export const SNAP_THRESHOLD_PX = 24;
 /** Gap between the marker and the unfolded panel. */
 export const PANEL_GAP_PX = 8;
+/**
+ * How close to a work-area edge the marker has to be for the panel to unfold
+ * *away* from that edge instead of to the roomier side (§9.3). Same distance as
+ * the snap threshold: a marker the user pushed up against an edge is "docked"
+ * to it, whether or not snapping is switched on.
+ */
+export const PANEL_DOCK_THRESHOLD_PX = 24;
 
 export function clamp(value: number, min: number, max: number): number {
   if (max < min) return min;
@@ -154,8 +161,43 @@ export function isVisibleIn(bounds: Rect, workAreas: readonly Rect[], minVisible
 }
 
 /**
- * Places the unfolded panel next to the marker: it opens away from the nearest
- * screen edge and is always clamped inside the work area (§9.3 "最小可见性保证").
+ * The work-area edge the marker is docked to, or `free` when it sits further in
+ * than `threshold`. Used for panel placement, so it looks at geometry only — the
+ * stored anchor is not consulted, which is what lets the panel be re-placed on
+ * every drag frame rather than only once the drag has ended.
+ */
+export function dockedEdge(
+  bounds: Rect,
+  workArea: Rect,
+  threshold: number = PANEL_DOCK_THRESHOLD_PX,
+): MarkerEdge {
+  const distances: Record<'left' | 'right' | 'top' | 'bottom', number> = {
+    left: bounds.x - workArea.x,
+    right: workArea.x + workArea.width - (bounds.x + bounds.width),
+    top: bounds.y - workArea.y,
+    bottom: workArea.y + workArea.height - (bounds.y + bounds.height),
+  };
+
+  let edge: MarkerEdge = 'free';
+  let best = threshold;
+  for (const candidate of ['left', 'right', 'top', 'bottom'] as const) {
+    if (distances[candidate] < best) {
+      best = distances[candidate];
+      edge = candidate;
+    }
+  }
+  return edge;
+}
+
+/**
+ * Places the unfolded panel next to the marker (docs/ARCHITECTURE.md §9.3).
+ *
+ * A marker docked to an edge unfolds the panel away from it: top → downwards,
+ * bottom → upwards, left → rightwards, right → leftwards. Only a marker parked
+ * away from every edge falls back to picking the side the pointer is *not* on.
+ * Either way the panel is clamped inside the work area, so it can never open
+ * off screen — and the perpendicular axis is centred on the marker, which keeps
+ * it looking attached rather than merely adjacent.
  */
 export function placePanel(
   markerBounds: Rect,
@@ -163,6 +205,22 @@ export function placePanel(
   workArea: Rect,
   gap: number = PANEL_GAP_PX,
 ): Rect {
+  const edge = dockedEdge(markerBounds, workArea);
+  const centeredX = markerBounds.x + (markerBounds.width - panelSize.width) / 2;
+  const centeredY = markerBounds.y + (markerBounds.height - panelSize.height) / 2;
+
+  if (edge !== 'free') {
+    const spot: { x: number; y: number } =
+      edge === 'top'
+        ? { x: centeredX, y: markerBounds.y + markerBounds.height + gap }
+        : edge === 'bottom'
+          ? { x: centeredX, y: markerBounds.y - panelSize.height - gap }
+          : edge === 'left'
+            ? { x: markerBounds.x + markerBounds.width + gap, y: centeredY }
+            : { x: markerBounds.x - panelSize.width - gap, y: centeredY };
+    return place(spot.x, spot.y, panelSize, workArea);
+  }
+
   const marker = centerOf(markerBounds);
   const rightHalf = marker.x >= workArea.x + workArea.width / 2;
 
@@ -173,13 +231,22 @@ export function placePanel(
   if (x < workArea.x) x = rightCandidate;
   if (x + panelSize.width > workArea.x + workArea.width) x = leftCandidate;
 
-  const maxX = Math.max(workArea.x, workArea.x + workArea.width - panelSize.width);
-  const maxY = Math.max(workArea.y, workArea.y + workArea.height - panelSize.height);
+  return place(x, centeredY, panelSize, workArea);
+}
 
+/** Clamps a placement into the work area, keeping the given size. */
+function place(
+  x: number,
+  y: number,
+  size: { width: number; height: number },
+  workArea: Rect,
+): Rect {
+  const maxX = Math.max(workArea.x, workArea.x + workArea.width - size.width);
+  const maxY = Math.max(workArea.y, workArea.y + workArea.height - size.height);
   return {
     x: Math.round(clamp(x, workArea.x, maxX)),
-    y: Math.round(clamp(marker.y - panelSize.height / 2, workArea.y, maxY)),
-    width: panelSize.width,
-    height: panelSize.height,
+    y: Math.round(clamp(y, workArea.y, maxY)),
+    width: size.width,
+    height: size.height,
   };
 }

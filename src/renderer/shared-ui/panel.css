@@ -18,6 +18,22 @@
   transform: scale(0.96);
   transition-property: opacity, transform;
   transition-timing-function: var(--ease-emphasized), var(--ease-spring);
+  /*
+   * Panel transparency (M01「面板形态」, §9.9). It is the surface that fades, not the
+   * card: `opacity` on the card would take the text down with it, so instead the
+   * theme's own `--bg-surface` is mixed with transparency at the ratio the slider
+   * sets. `color-mix` is what keeps this theme-agnostic — no second copy of any
+   * theme's background colour, and no `color-mix` arithmetic done in JS.
+   *
+   * The variable defaults to 1 so a panel opened without a stored value is opaque.
+   * Deliberately not part of the transition above: the slider has to be visible
+   * while it is dragged.
+   */
+  background-color: color-mix(
+    in srgb,
+    var(--bg-surface) calc(var(--panel-opacity, 1) * 100%),
+    transparent
+  );
 }
 
 .panel-card[data-phase='open'] {

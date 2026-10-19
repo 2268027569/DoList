@@ -117,7 +117,7 @@ toDoList/
 | 常驻 | 常驻（应用的心跳） | 按需 show/hide，不销毁（除非省电模式空闲销毁） |
 | 任务栏 | `skipTaskbar: true` | `skipTaskbar: true`（全程靠托盘与快捷键访问） |
 | 焦点 | `focusable: false`（不抢焦点） | 正常可聚焦，`blur` 后延迟收起 |
-| 层级 | 置顶 | 置顶（可配置） |
+| 层级 | 置顶 | 置顶（写死，无开关） |
 
 **为什么两个窗口都不进任务栏**：应用定位是"隐形"，任务栏出现条目会立刻破坏这个定位；常驻托盘图标 + 全局快捷键已能满足"随时可达"。这也避免了 Windows 上任务栏图标闪烁与 macOS Dock 常驻的观感问题。
 
@@ -435,7 +435,7 @@ theme: { extend: { colors: {
 | `backgroundColor` | `#00000000` | 主题底色（避免首帧闪白） |
 | `skipTaskbar` | `true` | `true` |
 | `focusable` | `false`（不抢焦点） | `true` |
-| `alwaysOnTop` | `true`（macOS 用 `setAlwaysOnTop(true, 'screen-saver')`；Windows 层面参数无效，用顶层置顶） | 可配置，默认 `true` |
+| `alwaysOnTop` | `true`（macOS 用 `setAlwaysOnTop(true, 'screen-saver')`；Windows 层面参数无效，用顶层置顶） | `true` 写死（无开关，见 §9.9） |
 | `hasShadow` / `roundedCorners` | `false` / 系统默认 | 由 CSS 画圆角与阴影 |
 | macOS 额外项 | `acceptFirstMouse: true`、`type: 'panel'`、`visibleOnAllWorkspaces(true, { visibleOnFullScreen: true })` | 同左（`type` 视情况） |
 | 其他 | `resizable: false`、`maximizable: false`、`fullscreenable: false` | `resizable: false`，`movable: false`（位置由程序计算） |
@@ -489,7 +489,11 @@ Chromium 在「指针捕获 + 窗口移动」时会重新定位系统光标（§
 - **阈值 0 即"关闭吸附"**：`snapToWorkArea` 的阈值只控制"是否吸附到边"，为 0 时永不命中，函数退化为纯粹的"clamp 回工作区"，此时拖拽结束产出的是 `free` 锚点，经 `fromAnchor` 原样还原——所以"关掉吸附"不需要第二条代码路径，只需把 `markerSnapThresholdOf()` 的返回值压成 0。
 - 持久化用**锚点**而不是绝对坐标：记录 `{ displayId, edge, offsetFromEdge, ratioAlongEdge }`。显示器分辨率或任务栏高度变化时，按比例与边缘锚点还原，比存绝对 x/y 稳得多。
 - 显示器变化监听：`display-added` / `display-removed` / `display-metrics-changed` → 若标记落在所有 `workArea` 之外，移回主屏右下角并提示一次。
-- 最小可见性保证：面板展开位置根据标记所在边自动避让（如标记贴右边缘则面板向左展开），并在计算后 clamp 到 `workArea` 内。
+- 最小可见性保证：`placePanel(markerBounds, panelSize, workArea)` 按**标记停靠的那条边**决定面板朝哪开——贴顶向下、贴底向上、贴左向右、贴右向左；只有离开所有边（`dockedEdge()` 返回 `free`）时才退回"避开光标所在的那半屏"。两个分支最后都 clamp 到 `workArea` 内，所以面板不可能开到屏幕外。
+  - 判定只看几何、**不读存储的锚点**：`dockedEdge()` 用与吸附同一个阈值（24px）判断标记贴着哪条边，因此拖拽过程中每一帧都能重新推出方向——不需要"松手后再修一次"。
+  - 垂直/水平方向的居中会被 clamp 让位：标记贴着工作区下沿时，面板即使该居中也会被推回去（这正是"不能开到屏幕外"的代价，冒烟因此允许 `centred` 或 `clamped` 二选一）。
+  - **面板跟随标记**（`followMarker`，`windows/panel.ts`）：标记每次 `setBounds`（拖拽帧，含松手吸附）都通知订阅者，面板用新矩形**重新推导**而不是按位移平移——所以标记中途越过一条边时，面板会当场翻到另一侧，而不是吊在错的那一边。面板隐藏时不参与（`isVisible()` 直接返回）。通知放在 `windows/marker.ts` 的 `onMarkerMoved()`，矩形而非位移进回调，正是为了让每个订阅者自己决定怎么用。
+  - 跟随只写主进程内存里的窗口位置，**不落盘**（§9.9 的"位置不存"同一条理由）。
 
 ### 9.4 贴边自动隐藏（P1）
 
@@ -562,7 +566,7 @@ Chromium 在「指针捕获 + 窗口移动」时会重新定位系统光标（§
 
 **为什么没有 `:focus-visible` 样式**：标记窗口是 `focusable: false`（§3），它永远拿不到键盘焦点，焦点环规则不可达，属死代码。
 
-### 9.9 面板尺寸记忆与"伪 resize"（M01）
+### 9.9 面板尺寸记忆、透明度与"伪 resize"（M01）
 
 面板窗口 `resizable: false`——Windows 上无边框透明窗口只有在 `thickFrame: true`（即带系统边框）时才有可拖拽的 resize 边框，那正是我们要避免的（§9.1.1）。因此：
 
@@ -570,6 +574,15 @@ Chromium 在「指针捕获 + 窗口移动」时会重新定位系统光标（§
 - 主进程用 `clampPanelSize()` 夹到 320–640 × 420–900，再用 `snapToWorkArea(..., 阈值 0)` 把位置 clamp 回工作区（此处不需要吸附语义，只是"别跑出屏幕"），最后 `setBounds`。左上角保持不动。
 - 尺寸在停手 250ms 后防抖写入设置（`panelWidth` / `panelHeight`）；**位置不存**——每次展开都由 `placePanel()` 依标记重新推导，存了反而会和标记位置打架。
 - 设置里的尺寸在下次创建窗口时生效。
+
+**面板固定置顶**：`alwaysOnTop: true` 写死在窗口参数里，`window:set-always-on-top` 通道与 `panelAlwaysOnTop` 设置项**都已删除**。面板靠标记与快捷键到达，一个能被别的窗口盖住的面板就不叫"随时可达"；留一个开关等于留一条"它在我看不见的地方"的路径。
+
+**面板透明度**（`panelOpacity`，0.5–1，默认 1）：
+
+- 唯一一个面板自己的外观旋钮，摆在面板头部（`panel-settings.tsx`）而不是设置窗口里——这个控件必须"一边拖一边看见效果"，面板自己淡下去就是它的预览。M10 的设置窗口将来读写的是同一个字段。
+- **只降表面透明度，不动正文**：`panel.css` 用 `color-mix(in srgb, var(--bg-surface) calc(var(--panel-opacity, 1) * 100%), transparent)` 混出卡片底色。若改用 `opacity`，文字会跟着一起淡，对比度就守不住了；用 `color-mix` 还顺带做到**主题无关**——不必为每套主题再抄一份背景色，也不在 JS 里算颜色。
+- 取值在**首绘前**随 boot 参数到达（§7），所以窗口不会先不透明画一帧再淡下去；`--panel-opacity` 也刻意**不进**展开动画的过渡属性，否则拖动滑杆时动画会追着跑。
+- 写入防抖 200ms（`use-panel-opacity.ts`）：滑杆连续上报，一次上报=一次 SQLite 写+一次贴边隐藏重算，所以只在停手后落盘，而**应用**是每帧都做（看得见效果才是这个控件的意义）。
 
 ---
 
@@ -632,7 +645,7 @@ CI 门槛：`lint` + `typecheck` + `test` + `i18n:check` + 主题令牌静态检
 ## 14. 待你确认的开放问题
 
 1. **葡萄牙语基准**：`pt` 统一（巴西为主）还是区分 `pt-BR` / `pt-PT`？（我建议首发只做 `pt`，巴西葡萄牙语为基准）
-2. **面板是否默认置顶**：默认置顶会遮挡其他窗口，但符合"随手记"的直觉；我建议默认置顶且可关闭。
+2. ~~面板是否默认置顶~~ → **已决（2026-10-20）**：**固定置顶**，连开关都不留。面板靠标记与快捷键到达，能被别的窗口盖住就破坏了"随时可达"；`window:set-always-on-top` 通道与 `panelAlwaysOnTop` 设置项已随之删除。面板自己的外观旋钮只剩透明度（§9.9）。
 3. ~~标记默认形态~~ → **已实现**：圆点 28×28，`markerBadge` 默认 `open`、`markerRing` 默认开；形态/缩放/透明度/配色均可在设置里改（§9.8）。
 4. **是否允许面板出现在任务栏**：我建议两个窗口都不进任务栏，只留托盘。
 5. ~~默认快捷键~~ → **已实现（M02 S3）**：唤起/隐藏 `Ctrl/Cmd+Shift+Space`、快速新增 `Ctrl/Cmd+Shift+N`，注册与拒绝都写日志；M09 才做可配置与冲突检测。

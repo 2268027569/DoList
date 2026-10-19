@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Rect } from '../types/app';
-import { SNAP_THRESHOLD_PX, fromAnchor, isVisibleIn, placePanel, snapToWorkArea, toAnchor } from './anchoring';
+import {
+  SNAP_THRESHOLD_PX,
+  dockedEdge,
+  fromAnchor,
+  isVisibleIn,
+  placePanel,
+  snapToWorkArea,
+  toAnchor,
+} from './anchoring';
 
 const WORK_AREA: Rect = { x: 0, y: 0, width: 1920, height: 1040 };
 const MARKER = { width: 28, height: 28 };
@@ -99,14 +107,49 @@ describe('isVisibleIn', () => {
 });
 
 describe('placePanel', () => {
-  it('opens to the left when the marker is on the right half of the screen', () => {
+  it('opens downwards when the marker is parked at the top edge', () => {
+    const rect = placePanel({ x: 900, y: 0, ...MARKER }, PANEL, WORK_AREA);
+    expect(rect.y).toBe(MARKER.height + 8);
+    expect(rect.x).toBe(Math.round(900 + (MARKER.width - PANEL.width) / 2));
+  });
+
+  it('opens upwards when the marker is parked at the bottom edge', () => {
+    const marker: Rect = { x: 900, y: WORK_AREA.height - MARKER.height, ...MARKER };
+    const rect = placePanel(marker, PANEL, WORK_AREA);
+    expect(rect.y).toBe(WORK_AREA.height - MARKER.height - PANEL.height - 8);
+    expect(rect.y + rect.height).toBeLessThanOrEqual(marker.y);
+  });
+
+  it('opens to the right when the marker is parked at the left edge', () => {
+    const rect = placePanel({ x: 0, y: 500, ...MARKER }, PANEL, WORK_AREA);
+    expect(rect.x).toBe(MARKER.width + 8);
+    expect(rect.x).toBeGreaterThanOrEqual(MARKER.width);
+  });
+
+  it('opens to the left when the marker is parked at the right edge', () => {
+    const marker: Rect = { x: WORK_AREA.width - MARKER.width, y: 500, ...MARKER };
+    const rect = placePanel(marker, PANEL, WORK_AREA);
+    expect(rect.x + rect.width).toBe(marker.x - 8);
+  });
+
+  it('needs no stored anchor: placement follows the geometry alone', () => {
+    // The panel is re-placed on every drag frame, when the anchor is still the
+    // pre-drag one — so two rectangles that differ only in how far in they sit
+    // must produce two different sides.
+    const docked = placePanel({ x: 900, y: 20, ...MARKER }, PANEL, WORK_AREA);
+    const free = placePanel({ x: 900, y: 400, ...MARKER }, PANEL, WORK_AREA);
+    expect(docked.y).toBe(20 + MARKER.height + 8);
+    expect(free.y).toBe(400 + (MARKER.height - PANEL.height) / 2);
+  });
+
+  it('opens to the left when a free marker is on the right half of the screen', () => {
     const rect = placePanel({ x: 1800, y: 500, ...MARKER }, PANEL, WORK_AREA);
     expect(rect.x).toBe(1800 - PANEL.width - 8);
     expect(rect.y).toBe(500 + MARKER.height / 2 - PANEL.height / 2);
     expect(rect.width).toBe(PANEL.width);
   });
 
-  it('opens to the right when the marker is on the left half', () => {
+  it('opens to the right when a free marker is on the left half', () => {
     const rect = placePanel({ x: 40, y: 500, ...MARKER }, PANEL, WORK_AREA);
     expect(rect.x).toBe(40 + MARKER.width + 8);
   });
@@ -118,9 +161,9 @@ describe('placePanel', () => {
     expect(rect.x + rect.width).toBeLessThanOrEqual(narrow.width);
   });
 
-  it('clamps the vertical position at the bottom edge', () => {
-    const rect = placePanel({ x: 1800, y: 1030, ...MARKER }, PANEL, WORK_AREA);
-    expect(rect.y).toBe(WORK_AREA.height - PANEL.height);
+  it('centres the panel on the marker when it opens downwards', () => {
+    const rect = placePanel({ x: 900, y: 0, ...MARKER }, PANEL, WORK_AREA);
+    expect(rect.x + rect.width / 2).toBeCloseTo(900 + MARKER.width / 2, 6);
   });
 
   it('honours a display with a non-zero origin', () => {
@@ -128,5 +171,20 @@ describe('placePanel', () => {
     const rect = placePanel({ x: 3700, y: 400, ...MARKER }, PANEL, secondary);
     expect(rect.x).toBeGreaterThanOrEqual(secondary.x);
     expect(rect.x + rect.width).toBeLessThanOrEqual(secondary.x + secondary.width);
+  });
+});
+
+describe('dockedEdge', () => {
+  it('reports the edge the marker is parked against', () => {
+    expect(dockedEdge({ x: 900, y: 0, ...MARKER }, WORK_AREA)).toBe('top');
+    expect(dockedEdge({ x: 900, y: 1012, ...MARKER }, WORK_AREA)).toBe('bottom');
+    expect(dockedEdge({ x: 0, y: 500, ...MARKER }, WORK_AREA)).toBe('left');
+    expect(dockedEdge({ x: 1892, y: 500, ...MARKER }, WORK_AREA)).toBe('right');
+  });
+
+  it('reports free past the dock threshold, in either direction', () => {
+    expect(dockedEdge({ x: 40, y: 500, ...MARKER }, WORK_AREA)).toBe('free');
+    expect(dockedEdge({ x: 900, y: 40, ...MARKER }, WORK_AREA)).toBe('free');
+    expect(dockedEdge({ x: 900, y: 40, ...MARKER }, WORK_AREA, 64)).toBe('top');
   });
 });

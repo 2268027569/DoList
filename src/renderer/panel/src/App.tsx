@@ -3,12 +3,15 @@ import type { ReactElement, ReactNode, TransitionEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { BootParams } from '@shared/types/app';
+import { PANEL_OPACITY_RANGE } from '@shared/contracts/settings';
 import { applyBootParams } from '../../shared-ui/boot';
 import { changeLocale } from '../../shared-ui/i18n';
+import { PanelSettings } from './panel-settings';
 import { QuickAdd } from './quick-add';
 import { TaskDetail } from './task-detail';
 import { TaskList } from './task-list';
 import { usePanelStore } from './store';
+import { usePanelOpacity } from './use-panel-opacity';
 import { usePanelResize } from './use-panel-resize';
 
 /**
@@ -31,10 +34,20 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
   const [open, setOpen] = useState(false);
   const [durationMs, setDurationMs] = useState(160);
   const resize = usePanelResize();
+  // Seeded from the boot parameter, which is where the stored value arrives (§9.9):
+  // the window is drawn at the right opacity rather than faded after the first paint.
+  const { opacity, setOpacity } = usePanelOpacity(boot.panelOpacity ?? PANEL_OPACITY_RANGE.max);
 
   useEffect(() => {
     setBoot(boot);
   }, [boot, setBoot]);
+
+  // The surface's transparency is a variable, not a colour: the card mixes it into
+  // whatever `--bg-surface` the active theme provides, so the text keeps its
+  // contrast and only the panel's own background fades (panel.css).
+  useEffect(() => {
+    document.documentElement.style.setProperty('--panel-opacity', String(opacity));
+  }, [opacity]);
 
   useEffect(() => {
     void refreshTasks();
@@ -114,7 +127,7 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
   return (
     <div className="flex h-full w-full p-2">
       <section
-        className="panel-card relative flex h-full w-full flex-col gap-3 overflow-hidden rounded-[var(--panel-radius)] border border-[var(--border-default)] bg-[var(--bg-surface)] px-[var(--panel-padding)] py-[var(--panel-padding)] shadow-[var(--panel-shadow)]"
+        className="panel-card relative flex h-full w-full flex-col gap-3 overflow-hidden rounded-[var(--panel-radius)] border border-[var(--border-default)] px-[var(--panel-padding)] py-[var(--panel-padding)] shadow-[var(--panel-shadow)]"
         data-phase={open ? 'open' : 'closed'}
         style={{ transitionDuration: `${durationMs}ms` }}
         onTransitionEnd={handleTransitionEnd}
@@ -147,8 +160,11 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
                   {t('tasks:view.today')}
                 </ViewTab>
               </nav>
-              <span className="text-xs text-[var(--text-muted)]">
-                {t('tasks:summary.pending', { count: tasks.length })}
+              <span className="flex items-baseline gap-1">
+                <span className="text-xs text-[var(--text-muted)]">
+                  {t('tasks:summary.pending', { count: tasks.length })}
+                </span>
+                <PanelSettings opacity={opacity} onOpacity={setOpacity} />
               </span>
             </header>
 

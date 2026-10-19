@@ -6,6 +6,7 @@
   "today.empty": "今天没有到期任务。",
   "quickAdd.placeholder": "输入任务后按回车",
   "summary.pending": "{count, plural, =0 {今天没有待办} other {今天还有 # 项待办}}",
+  "appearance.open": "面板外观",
   "list.loadFailed": "任务没能载入。数据仍在本地，重新打开面板即可再试。",
   "priority.none": "无优先级",
   "priority.high": "高优先级",

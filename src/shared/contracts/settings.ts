@@ -14,6 +14,12 @@ export const SETTINGS_KEY = {
 /** Artwork scale bounds the marker window can be resized within (§9.1). */
 export const MARKER_SCALE_RANGE = { min: 0.8, max: 1.5 } as const;
 export const MARKER_OPACITY_RANGE = { min: 0.4, max: 1 } as const;
+/**
+ * How see-through the panel's own surface may be (docs/FEATURES.md M01 "面板形态").
+ * Only the card's background drops below opaque so the text keeps its contrast;
+ * the lower bound is where a light theme still reads over a busy desktop.
+ */
+export const PANEL_OPACITY_RANGE = { min: 0.5, max: 1 } as const;
 /** Edge-snap threshold bounds, in DIPs (docs/FEATURES.md M01 "屏幕边缘吸附"). */
 export const MARKER_SNAP_THRESHOLD_RANGE = { min: 0, max: 80 } as const;
 export const DEFAULT_SNAP_THRESHOLD = 24;
@@ -54,7 +60,12 @@ const fieldSchemas = {
     .number()
     .min(PANEL_SIZE_RANGE.min.height)
     .max(PANEL_SIZE_RANGE.max.height),
-  panelAlwaysOnTop: z.boolean(),
+  /**
+   * The panel is always on top (there is no switch to turn that off: a panel that
+   * can hide behind another window is not the "隐形但随时可达" the app is for), so
+   * the only appearance knob it owns is how solid its surface looks.
+   */
+  panelOpacity: z.number().min(PANEL_OPACITY_RANGE.min).max(PANEL_OPACITY_RANGE.max),
 };
 
 /** Complete settings; missing keys fall back to the documented defaults. */
@@ -79,7 +90,7 @@ export const appSettingsSchema = z.object({
   markerHideExit: fieldSchemas.markerHideExit.default(DEFAULT_MARKER_HIDE.exit),
   panelWidth: fieldSchemas.panelWidth.default(PANEL_SIZE.width),
   panelHeight: fieldSchemas.panelHeight.default(PANEL_SIZE.height),
-  panelAlwaysOnTop: fieldSchemas.panelAlwaysOnTop.default(true),
+  panelOpacity: fieldSchemas.panelOpacity.default(PANEL_OPACITY_RANGE.max),
 });
 
 /** Partial update: only the keys the caller sent are touched. */

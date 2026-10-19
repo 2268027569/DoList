@@ -7,6 +7,7 @@ import type {
   MarkerTint,
   ThemeMode,
 } from '../types/app';
+import { PANEL_OPACITY_RANGE } from '../contracts/settings';
 import { MARKER_SCALE } from './marker-geometry';
 
 /**
@@ -91,10 +92,20 @@ export function parseBootParams(search: string): BootParams {
     theme: isThemeId(theme) ? theme : DEFAULT_BOOT.theme,
     locale: isLocale(locale) ? locale : DEFAULT_BOOT.locale,
   };
+  const panelOpacity = parseOpacity(params.get('panelOpacity'));
+  if (panelOpacity !== undefined) parsed.panelOpacity = panelOpacity;
   const marker = parseMarkerAppearance(params.get('marker'));
   if (marker !== undefined) parsed.marker = marker;
   if (params.get('smoke') === '1') parsed.smoke = true;
   return parsed;
+}
+
+/** One opacity token; anything malformed is dropped rather than trusted. */
+function parseOpacity(value: string | null): number | undefined {
+  if (value === null) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return undefined;
+  return clamp(parsed, PANEL_OPACITY_RANGE.min, PANEL_OPACITY_RANGE.max);
 }
 
 export function bootQuery(params: BootParams): Record<string, string> {
@@ -103,6 +114,7 @@ export function bootQuery(params: BootParams): Record<string, string> {
     theme: params.theme,
     locale: params.locale,
   };
+  if (params.panelOpacity !== undefined) query['panelOpacity'] = String(params.panelOpacity);
   if (params.marker) query['marker'] = encodeMarkerAppearance(params.marker);
   if (params.smoke) query['smoke'] = '1';
   return query;

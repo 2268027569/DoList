@@ -4,15 +4,15 @@ import { join } from 'node:path';
 import { IPC } from '@shared/contracts/channels';
 import { panelSizeOf } from '@shared/contracts/settings';
 import { TRANSPARENT_WINDOW_BACKGROUND } from '@shared/theme/window-background';
-import type { BootParams, PanelState } from '@shared/types/app';
 import { placePanel, snapToWorkArea } from '@shared/utils/anchoring';
 import { clampPanelSize, PANEL_SIZE } from '@shared/utils/panel-geometry';
+import type { BootParams, PanelState, Rect } from '@shared/types/app';
 import type { Size } from '@shared/utils/marker-geometry';
 import { createLogger } from '../logger';
 import { isSmokeEnabled, smokeRecord } from '../platform/smoke';
 import { appSettings, updateAppSettings } from '../services/settings';
 import { loadRenderer } from './load-renderer';
-import { getMarkerWindow, revealMarker, setMarkerPanelVisible } from './marker';
+import { getMarkerWindow, onMarkerMoved, revealMarker, setMarkerPanelVisible } from './marker';
 
 const log = createLogger('windows/panel');
 
@@ -26,12 +26,17 @@ const COLLAPSE_DELAY_MS = 150;
 const COLLAPSE_FALLBACK_MS = 400;
 /** How long the resize handle must be still before the new size is written. */
 const PANEL_SIZE_PERSIST_DEBOUNCE_MS = 250;
+/** How long the marker must be still before a follow is reported (see followMarker). */
+const FOLLOW_REPORT_DELAY_MS = 150;
 
 let panelWindow: BrowserWindow | null = null;
 let panelState: PanelState = 'hidden';
 let collapseTimer: NodeJS.Timeout | null = null;
 let fallbackTimer: NodeJS.Timeout | null = null;
 let persistSizeTimer: NodeJS.Timeout | null = null;
+/** Latest follow waiting to be reported, and the timer that will report it. */
+let pendingFollow: { markerBounds: Rect; panelBounds: Rect } | null = null;
+let followReportTimer: NodeJS.Timeout | null = null;
 
 export function getPanelWindow(): BrowserWindow | null {
   return panelWindow;
@@ -60,7 +65,10 @@ export function createPanelWindow(boot: BootParams): BrowserWindow {
     minimizable: false,
     fullscreenable: false,
     skipTaskbar: true,
-    alwaysOnTop: appSettings().panelAlwaysOnTop,
+    // Always on top, with no switch to turn it off: the panel is reached by the
+    // marker and the shortcuts, and it would be pointless if another window could
+    // cover it (docs/ARCHITECTURE.md §9.9).
+    alwaysOnTop: true,
     hasShadow: false,
     roundedCorners: false,
     ...(process.platform === 'win32' ? { thickFrame: false } : {}),
@@ -76,6 +84,7 @@ export function createPanelWindow(boot: BootParams): BrowserWindow {
   if (process.platform === 'darwin') {
     window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   }
+  window.setAlwaysOnTop(true);
 
   window.on('blur', () => scheduleCollapse());
   window.on('focus', () => cancelCollapse());
@@ -85,8 +94,12 @@ export function createPanelWindow(boot: BootParams): BrowserWindow {
   });
 
   panelWindow = window;
+  // The marker is the panel's anchor, so a drag has to drag the panel along —
+  // and re-derive where it opens, which is what flips it to the other side when
+  // the user pushes the marker across an edge mid-drag.
+  onMarkerMoved(followMarker);
   void loadRenderer(window, 'panel', boot);
-  log('panel created (hidden)', { alwaysOnTop: appSettings().panelAlwaysOnTop });
+  log('panel created (hidden)', { alwaysOnTop: true });
   return window;
 }
 
@@ -153,6 +166,50 @@ export function expandPanelForToday(): PanelState {
   return state;
 }
 
+/**
+ * Keeps an open panel attached while the marker is dragged (docs/FEATURES.md M01
+ * "全桌面拖拽"). Every drag frame reports the marker's new rectangle, and the
+ * panel is re-placed from it — re-placed rather than shifted by the same delta,
+ * so a marker crossing an edge mid-drag turns the panel around instead of
+ * leaving it hanging on the wrong side.
+ *
+ * No collapse is cancelled here: the marker window is `focusable: false`, so
+ * grabbing it never takes focus off the panel and the blur timer never starts.
+ */
+export function followMarker(markerBounds: Rect): void {
+  const window = panelWindow;
+  if (window === null || window.isDestroyed() || !window.isVisible()) return;
+
+  const display = screen.getDisplayNearestPoint({
+    x: markerBounds.x + markerBounds.width / 2,
+    y: markerBounds.y + markerBounds.height / 2,
+  });
+  const next = placePanel(markerBounds, currentPanelSize(window), display.workArea);
+  const current = window.getBounds();
+  if (next.x === current.x && next.y === current.y) return;
+
+  window.setBounds(next);
+  scheduleFollowReport(markerBounds, next);
+}
+
+/**
+ * Reports the follow once a burst of movement has stopped, rather than on every
+ * frame. The harness asserts that the panel ended up attached to where the drag
+ * left the marker, so what it needs is the settled rectangle — and writing the
+ * status file 30 times mid-drag would put a synchronous file write in the middle
+ * of the frames whose timing the drag assertions measure.
+ */
+function scheduleFollowReport(markerBounds: Rect, panelBounds: Rect): void {
+  pendingFollow = { markerBounds, panelBounds };
+  if (followReportTimer !== null) clearTimeout(followReportTimer);
+  followReportTimer = setTimeout(() => {
+    followReportTimer = null;
+    if (pendingFollow === null) return;
+    smokeRecord('panel-followed', pendingFollow);
+    pendingFollow = null;
+  }, FOLLOW_REPORT_DELAY_MS);
+}
+
 export function collapsePanel(): void {
   const window = panelWindow;
   if (window === null || window.isDestroyed() || !window.isVisible()) {
@@ -180,14 +237,6 @@ export function togglePanel(): PanelState {
   if (panelState === 'hidden') return expandPanel();
   collapsePanel();
   return panelState;
-}
-
-export function setPanelAlwaysOnTop(enabled: boolean): boolean {
-  const window = panelWindow;
-  if (window === null || window.isDestroyed()) return enabled;
-  window.setAlwaysOnTop(enabled);
-  log('panel always-on-top set', { enabled });
-  return enabled;
 }
 
 /**

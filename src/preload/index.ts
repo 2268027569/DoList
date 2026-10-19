@@ -35,7 +35,6 @@ const api = {
     expand: () => invoke<unknown>(IPC.window.expand),
     collapse: () => invoke<unknown>(IPC.window.collapse),
     collapseFinished: () => invoke<null>(IPC.window.collapseFinished),
-    setAlwaysOnTop: (enabled: boolean) => invoke<boolean>(IPC.window.setAlwaysOnTop, { enabled }),
     resize: (size: { width: number; height: number }) =>
       invoke<{ width: number; height: number }>(IPC.window.resize, size),
   },

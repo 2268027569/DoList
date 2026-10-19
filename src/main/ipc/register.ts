@@ -8,7 +8,6 @@ import {
   panelSizeInput,
   setLocaleInput,
   smokeReportInput,
-  windowAlwaysOnTopInput,
 } from '@shared/contracts/schemas';
 import {
   SETTINGS_KEY,
@@ -43,7 +42,6 @@ import {
   finishCollapse,
   panelStateOf,
   resizePanel,
-  setPanelAlwaysOnTop,
 } from '../windows/panel';
 
 const log = createLogger('ipc');
@@ -71,12 +69,6 @@ export function registerIpcHandlers(): void {
   handle(IPC.window.collapseFinished, () => {
     finishCollapse();
     return ok(null);
-  });
-
-  handle(IPC.window.setAlwaysOnTop, (payload) => {
-    const parsed = windowAlwaysOnTopInput.safeParse(payload);
-    if (!parsed.success) return invalid('window:set-always-on-top', parsed.error.issues);
-    return ok(setPanelAlwaysOnTop(parsed.data.enabled));
   });
 
   handle(IPC.window.resize, (payload) => {

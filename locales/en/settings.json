@@ -8,8 +8,6 @@
   "mode.light": "Light",
   "mode.dark": "Dark",
   "mode.system": "System",
-  "alwaysOnTop.label": "Keep panel on top",
-  "alwaysOnTop.on": "On",
-  "alwaysOnTop.off": "Off",
+  "opacity.label": "Panel opacity",
   "about.version": "v{version}"
 }

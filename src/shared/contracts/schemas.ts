@@ -11,8 +11,6 @@ export const markerAnchorSchema = z.object({
   ratioAlongEdge: z.number().finite().min(0).max(1),
 });
 
-export const windowAlwaysOnTopInput = z.object({ enabled: z.boolean() });
-
 /**
  * A resize-handle target size. Only sanity-checked here: the size *range* is
  * enforced by `clampPanelSize` in the main process, because rejecting an

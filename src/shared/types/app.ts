@@ -68,6 +68,12 @@ export interface BootParams {
   theme: ThemeId;
   locale: string;
   /**
+   * Panel-only: how solid the panel's own surface is. Travels with the boot
+   * parameters for the same reason the theme does — it is read before the first
+   * paint, so the window is never drawn opaque and then faded (§9.9).
+   */
+  panelOpacity?: number;
+  /**
    * Marker-only: applied before the first paint so the window never flashes a
    * different shape / scale than the one it was sized for (§9.5).
    */

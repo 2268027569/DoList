@@ -26,7 +26,9 @@
  *  14. switching to the 今日 tab filters the same list rather than copying it, and a
  *      task added there is stored due today (slice S8), and
  *  15. switching back to the Inbox shows it again, next to the rows that are not due
- *      today (slice S8).
+ *      today (slice S8), and
+ *  16. the panel's own opacity slider dims its surface and stores the value it settled
+ *      on (M01 §9.9).
  *
  * Only two things come from the OS: the global shortcut, which a registered hotkey
  * only ever sees when the input queue produced it, and the app's own launch. Every
@@ -69,6 +71,15 @@ const SECOND_TASK = 'Call the vet';
 const SUBTASK = 'Take the big bag';
 /** Added while the 今日 view is showing, so it is due today by the view's own rule. */
 const TODAY_TASK = 'Call the plumber';
+
+/**
+ * Phase 10's slider step. Four arrow presses of five percent each take the default
+ * (fully opaque) surface to 80% — a value the bounds still allow, so the check is
+ * about the control working rather than about clamping.
+ */
+const OPACITY_ARROW_PRESSES = 4;
+const OPACITY_STEP_PERCENT = 5;
+const EXPECTED_OPACITY = (100 - OPACITY_ARROW_PRESSES * OPACITY_STEP_PERCENT) / 100;
 
 const results = [];
 
@@ -264,6 +275,7 @@ const KEYS = {
   Escape: { code: 'Escape', virtualKey: 27 },
   ArrowUp: { code: 'ArrowUp', virtualKey: 38 },
   ArrowDown: { code: 'ArrowDown', virtualKey: 40 },
+  ArrowLeft: { code: 'ArrowLeft', virtualKey: 37 },
   z: { code: 'KeyZ', virtualKey: 90 },
 };
 
@@ -355,6 +367,19 @@ function readTasks(scope = 'topLevel') {
  */
 function inboxRows() {
   return readTasks().filter((row) => row.status === 'todo' || row.status === 'doing');
+}
+
+/** The stored app settings row (JSON), read straight out of the smoke database. */
+function readAppSettings() {
+  const Database = require('better-sqlite3');
+  const db = new Database(databaseFile, { readonly: true });
+  try {
+    db.pragma('busy_timeout = 5000');
+    const row = db.prepare('SELECT value FROM settings WHERE key = ?').get('app.settings');
+    return row === undefined ? null : JSON.parse(row.value);
+  } finally {
+    db.close();
+  }
 }
 
 /** Local midnight `offsetDays` from today, worked out the way the panel's presets do. */
@@ -1287,6 +1312,78 @@ async function main() {
       fail(
         `the Inbox drew ${JSON.stringify(inboxRender?.detail ?? null)}, expected three rows ` +
           `including ${TODAY_TASK}`,
+      );
+    }
+
+    // --- phase 10: the panel's own surface can be made see-through (M01 §9.9) ---
+    // One slider in the panel header, because the control's whole point is that its
+    // effect is visible while it is used. It is driven by arrow keys so the value goes
+    // through the same React state a mouse drag would: a focused range fires the same
+    // change event either way.
+    await gotoField(cdp, 'panel-settings');
+    await pressKey(cdp, 'Enter');
+    const popover = await evaluate(
+      cdp,
+      `document.querySelector('[data-field="panel-appearance"]') !== null`,
+    );
+    if (popover === true) {
+      pass('the header control opened the panel appearance popover');
+    } else {
+      fail('the panel appearance popover did not open');
+    }
+
+    const cardBefore = await evaluate(
+      cdp,
+      `getComputedStyle(document.querySelector('.panel-card')).backgroundColor`,
+    );
+    const onSlider = await gotoField(cdp, 'panel-opacity');
+    if (onSlider !== null) {
+      for (let index = 0; index < OPACITY_ARROW_PRESSES; index += 1) {
+        await pressKey(cdp, 'ArrowLeft');
+      }
+      const applied = await evaluate(
+        cdp,
+        `(() => {
+           const slider = document.querySelector('[data-field="panel-opacity"]');
+           const root = document.documentElement;
+           return {
+             slider: Number(slider.value) / 100,
+             applied: Number(root.style.getPropertyValue('--panel-opacity')),
+             card: getComputedStyle(document.querySelector('.panel-card')).backgroundColor,
+           };
+         })()`,
+      );
+      if (applied?.slider === EXPECTED_OPACITY && applied?.applied === EXPECTED_OPACITY) {
+        pass(`the slider moved the surface to ${EXPECTED_OPACITY * 100}%`, applied);
+      } else {
+        fail(
+          `the slider reported ${JSON.stringify(applied ?? null)}, expected ${EXPECTED_OPACITY} ` +
+            'on both the control and --panel-opacity',
+        );
+      }
+      if (applied !== null && cardBefore !== null && applied.card !== cardBefore) {
+        pass('the panel surface itself changed, not just the variable it is mixed from', {
+          before: cardBefore,
+          after: applied.card,
+        });
+      } else {
+        fail(`the panel surface is still ${JSON.stringify(cardBefore)} after the slider moved`);
+      }
+    }
+
+    // The write waits for the slider to settle, so this reads the row once the debounce
+    // in use-panel-opacity.ts has fired. It is a settings write and not a task one:
+    // nothing about the list changed, so there is no `task-changed` to wait for either.
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    const stored = readAppSettings();
+    if (stored?.panelOpacity === EXPECTED_OPACITY) {
+      pass('the opacity the slider settled on is what the settings row holds', {
+        panelOpacity: stored.panelOpacity,
+      });
+    } else {
+      fail(
+        `the settings row holds panelOpacity ${JSON.stringify(stored?.panelOpacity ?? null)}, ` +
+          `expected ${EXPECTED_OPACITY}`,
       );
     }
   } finally {

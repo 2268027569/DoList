@@ -17,9 +17,10 @@ export const IPC = {
     expand: 'window:expand',
     /** Renderer -> main: start the collapse sequence. */
     collapse: 'window:collapse',
-    /** Renderer -> main: collapse animation finished, hide the window. */
+    /**
+     * Renderer -> main: collapse animation finished, hide the window.
+     */
     collapseFinished: 'window:collapse-finished',
-    setAlwaysOnTop: 'window:set-always-on-top',
     /**
      * Renderer -> main: the resize handle reports a target size. The main process
      * is the one that clamps it to the work area and persists it (windows/panel.ts).

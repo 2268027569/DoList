@@ -68,6 +68,7 @@ export function resolveBoot(smoke: boolean): BootParams {
     mode: resolveThemeMode(settings.themeMode),
     theme: settings.themeId,
     locale: resolveLocale(settings.locale),
+    panelOpacity: settings.panelOpacity,
   };
   if (smoke) boot.smoke = true;
   return boot;

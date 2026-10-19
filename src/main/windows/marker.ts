@@ -61,6 +61,22 @@ let edgeParked = false;
 /** The panel is open, so the marker must stay visible — it is the panel's anchor. */
 let panelVisible = false;
 
+/**
+ * Subscribers told every time the marker's rectangle changes, drag frames
+ * included. The panel window listens so it can travel with the marker
+ * (windows/panel.ts), which is why the notification carries the rectangle rather
+ * than a delta: each listener re-derives its own placement from it.
+ */
+const movedListeners = new Set<(bounds: Rect) => void>();
+
+export function onMarkerMoved(listener: (bounds: Rect) => void): void {
+  movedListeners.add(listener);
+}
+
+function notifyMarkerMoved(bounds: Rect): void {
+  for (const listener of movedListeners) listener(bounds);
+}
+
 export function getMarkerWindow(): BrowserWindow | null {
   return markerWindow;
 }
@@ -224,6 +240,7 @@ export function revealMarker(reason: string): Rect | null {
   if (!differs) return bounds;
 
   window.setBounds(bounds);
+  notifyMarkerMoved(bounds);
   if (wasParked) {
     log('marker left the screen edge', { reason, bounds });
     smokeRecord('edge-reveal', { reason, bounds });
@@ -405,6 +422,7 @@ function tickDrag(): void {
       Math.round(cursor.x - state.offsetX),
       Math.round(cursor.y - state.offsetY),
     );
+    notifyMarkerMoved(window.getBounds());
     state.lastCursor = cursor;
   }
 

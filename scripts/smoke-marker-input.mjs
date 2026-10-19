@@ -10,9 +10,9 @@
  * It launches the built app with `YICHEN_SMOKE=1`, drives the real cursor with
  * PowerShell (`mouse_event`), and checks what the renderers reported. Phases run
  * in this order: boot state → edge auto-hide → drag → click → panel geometry →
- * right-click / app menu (M02 S8). Auto-hide goes before the drag because it
- * needs the edge anchor the marker has at boot, and the drag is what gives it up
- * (§9.4).
+ * right-click / app menu (M02 S8) → panel follows the drag (M01 §9.3). Auto-hide
+ * goes before the drag because it needs the edge anchor the marker has at boot,
+ * and the drag is what gives it up (§9.4).
  *
  * Usage:
  *   npm run build
@@ -80,6 +80,18 @@ const EDGE_HIDE_TOLERANCE_DIP = 2;
 const CURSOR_AIM_TOLERANCE_DIP = 4;
 /** The renderer swallows clicks for 300ms after a drag (§9.2). */
 const CLICK_SUPPRESSION_BACKOFF_MS = 450;
+/**
+ * How close to a work-area edge the marker has to be for the panel to unfold away
+ * from it, mirroring PANEL_DOCK_THRESHOLD_PX in shared/utils/anchoring.ts. Same
+ * number as the snap threshold, so a marker that was just snapped is docked.
+ */
+const PANEL_DOCK_THRESHOLD_DIP = 24;
+/**
+ * The second drag, run with the panel open (phase 6). Smaller than the first one
+ * and aimed down-left, so it moves the marker across the middle of the screen
+ * rather than into the corner the first drag left it in.
+ */
+const FOLLOW_DRAG_DIP = { dx: -180, dy: 260 };
 
 const results = [];
 
@@ -296,6 +308,96 @@ function visibleAlongEdge(area, rect, edge) {
     default:
       return null;
   }
+}
+
+/**
+ * The work-area edge the marker is docked to, mirroring `dockedEdge()` in
+ * src/shared/utils/anchoring.ts — the same threshold and the same first-wins tie
+ * order this harness asserts against.
+ */
+function dockedEdgeOf(marker, area, threshold = PANEL_DOCK_THRESHOLD_DIP) {
+  const distances = {
+    left: marker.x - area.x,
+    right: area.x + area.width - (marker.x + marker.width),
+    top: marker.y - area.y,
+    bottom: area.y + area.height - (marker.y + marker.height),
+  };
+  let edge = 'free';
+  let best = threshold;
+  for (const candidate of ['left', 'right', 'top', 'bottom']) {
+    if (distances[candidate] < best) {
+      best = distances[candidate];
+      edge = candidate;
+    }
+  }
+  return edge;
+}
+
+/**
+ * Checks the one rule the panel's placement follows (§9.3): a marker docked to an
+ * edge unfolds the panel *away* from it — top → downwards, bottom → upwards, left
+ * → rightwards, right → leftwards — and a marker parked away from every edge
+ * opens beside it on the roomier side.
+ *
+ * Only the side and the gap are asserted, never the perpendicular axis: that axis
+ * is clamped into the work area, so a marker near a corner legitimately shifts the
+ * panel along it.
+ */
+function checkPanelSide(what, marker, panel, area) {
+  const edge = dockedEdgeOf(marker, area);
+  const tol = EDGE_HIDE_TOLERANCE_DIP;
+  const gapBelow = panel.y - (marker.y + marker.height);
+  const gapAbove = marker.y - (panel.y + panel.height);
+  const gapRight = panel.x - (marker.x + marker.width);
+  const gapLeft = marker.x - (panel.x + panel.width);
+  const near = (value) => Math.abs(value - PANEL_GAP_DIP) <= tol;
+
+  const problems = {
+    top: `${gapBelow} DIP below the marker (expected ${PANEL_GAP_DIP}: a top-docked marker unfolds downwards)`,
+    bottom: `${gapAbove} DIP above the marker (expected ${PANEL_GAP_DIP}: a bottom-docked marker unfolds upwards)`,
+    left: `${gapRight} DIP right of the marker (expected ${PANEL_GAP_DIP}: a left-docked marker unfolds rightwards)`,
+    right: `${gapLeft} DIP left of the marker (expected ${PANEL_GAP_DIP}: a right-docked marker unfolds leftwards)`,
+  };
+
+  if (edge !== 'free') {
+    const ok =
+      (edge === 'top' && near(gapBelow)) ||
+      (edge === 'bottom' && near(gapAbove)) ||
+      (edge === 'left' && near(gapRight)) ||
+      (edge === 'right' && near(gapLeft));
+    if (ok) {
+      pass(`${what}: opens away from the ${edge} edge it is docked to`, {
+        marker,
+        panel,
+        edge,
+      });
+      return;
+    }
+    fail(`${what}: the panel sits ${problems[edge]}`);
+    return;
+  }
+
+  const centred = Math.abs(panel.y + panel.height / 2 - (marker.y + marker.height / 2)) <= tol;
+  // A panel clamped against the work area's own top or bottom cannot also be centred
+  // on a marker that sits near that edge — being pushed back in is the correct answer
+  // there, and the rule being asserted is which *side* it opens on.
+  const clamped =
+    panel.y <= area.y + tol || panel.y + panel.height >= area.y + area.height - tol;
+  if ((centred || clamped) && (near(gapRight) || near(gapLeft))) {
+    pass(
+      `${what}: opens beside the marker at ${PANEL_GAP_DIP} DIP, ` +
+        `${centred ? 'centred on it' : 'clamped to the work area it would otherwise leave'}` +
+        ' (marker has no docked edge)',
+      { marker, panel, gap: near(gapRight) ? gapRight : gapLeft },
+    );
+    return;
+  }
+  fail(
+    `${what}: the marker has no docked edge, so the panel should open beside it at ` +
+      `${PANEL_GAP_DIP} DIP, centred on it or clamped inside the work area — gaps were ` +
+      `${gapLeft}/${gapRight} DIP, vertical offset ` +
+      `${Math.abs(panel.y + panel.height / 2 - (marker.y + marker.height / 2))} DIP`,
+  );
 }
 
 const PS1 = String.raw`
@@ -745,34 +847,27 @@ async function main() {
           );
         }
 
-        const area = display?.bounds ?? null;
-        const inside =
-          area === null ||
-          (panelBounds.x >= area.x &&
+        // Which side it opens on, and how far from the marker: the rule in §9.3
+        // (away from the docked edge) is what this asserts, not merely "nearby". The
+        // rect is the work area and not the display's bounds, because that is what
+        // `placePanel` clamps into: a marker resting on the taskbar is docked to the
+        // edge of the work area, which sits 48 DIP inside the screen here.
+        const area = display?.workArea ?? display?.bounds ?? null;
+        if (area === null) {
+          fail('the work area was not published, so the panel side is unverifiable');
+        } else {
+          const inside =
+            panelBounds.x >= area.x &&
             panelBounds.y >= area.y &&
             panelBounds.x + panelBounds.width <= area.x + area.width &&
-            panelBounds.y + panelBounds.height <= area.y + area.height);
-        if (inside) {
-          pass('panel opened fully inside the work area', { panelBounds });
-        } else {
-          fail(`panel opened outside the work area: ${JSON.stringify(panelBounds)}`);
-        }
+            panelBounds.y + panelBounds.height <= area.y + area.height;
+          if (inside) {
+            pass('panel opened fully inside the work area', { panelBounds });
+          } else {
+            fail(`panel opened outside the work area: ${JSON.stringify(panelBounds)}`);
+          }
 
-        // Adjacency: the panel opens beside the marker it was launched from,
-        // never on top of it.
-        const gapX = Math.min(
-          Math.abs(panelBounds.x - (markerAt.x + markerAt.width)),
-          Math.abs(markerAt.x - (panelBounds.x + panelBounds.width)),
-        );
-        const overlapsVertically =
-          panelBounds.y < markerAt.y + markerAt.height &&
-          markerAt.y < panelBounds.y + panelBounds.height;
-        if (overlapsVertically && gapX <= PANEL_GAP_DIP * 2) {
-          pass(`panel sits beside the marker (gap ${gapX} DIP)`, { markerAt, panelBounds });
-        } else {
-          fail(
-            `panel is not beside the marker: gap ${gapX} DIP, marker ${JSON.stringify(markerAt)}`,
-          );
+          checkPanelSide('panel after the marker click', markerAt, panelBounds, area);
         }
       }
     }
@@ -841,6 +936,70 @@ async function main() {
         pass('the menu item opened the panel through the same path the marker click uses', {
           panelBounds: reopened.detail?.panelBounds,
         });
+      }
+    }
+
+    // --- phase 6: the panel travels with the marker (M01 §9.3) --------------
+    // The panel is the marker's anchor, so dragging the marker has to drag the
+    // panel — and re-derive which side it opens on as the marker crosses edges,
+    // rather than staying where it was. The panel window reports every settled
+    // follow (`panel-followed`, debounced in windows/panel.ts), so what is
+    // asserted here is the app's own rectangles, not a position the harness
+    // guessed: the movement happened, and the result obeys the same side rule the
+    // click's placement was checked against.
+    //
+    // The drag starts from `menuTarget`: the marker has not moved since the
+    // right-click, and the boot snapshot `markerBounds()` is stale by now —
+    // phase 2's drag is what moved it.
+    const followSince = Date.now();
+    const followDrag =
+      menuTarget === null ? null : await runDrag(menuTarget, display, FOLLOW_DRAG_DIP);
+    const followed = await waitForEvent('panel-followed', 6_000, followSince);
+
+    if (menuTarget === null) {
+      fail('the marker position is unknown, so the panel-follow drag could not be aimed');
+    } else if (followDrag === null) {
+      fail('the marker did not follow the cursor while the panel was open');
+    } else if (followed === null) {
+      fail('the panel did not travel with the marker: no follow was reported');
+    } else {
+      const followedMarker = followed.detail?.markerBounds ?? null;
+      const followedPanel = followed.detail?.panelBounds ?? null;
+      const landedMarker = followDrag.dragEnd.detail?.bounds ?? null;
+      const area = display?.workArea ?? display?.bounds ?? null;
+
+      if (
+        followedMarker === null ||
+        followedPanel === null ||
+        landedMarker === null ||
+        area === null
+      ) {
+        fail('the follow event did not publish both rectangles');
+      } else if (distance(followedMarker, landedMarker) > EDGE_HIDE_TOLERANCE_DIP) {
+        fail(
+          `the reported follow used the marker's rectangle from ${JSON.stringify(followedMarker)}, ` +
+            `but the drag left it at ${JSON.stringify(landedMarker)}`,
+        );
+      } else {
+        pass('the panel followed the marker through the drag (reported rectangles match the drag end)', {
+          marker: followedMarker,
+          panel: followedPanel,
+        });
+
+        const inside =
+          followedPanel.x >= area.x &&
+          followedPanel.y >= area.y &&
+          followedPanel.x + followedPanel.width <= area.x + area.width &&
+          followedPanel.y + followedPanel.height <= area.y + area.height;
+        if (inside) {
+          pass('the panel is still fully inside the work area after following the drag', {
+            panel: followedPanel,
+          });
+        } else {
+          fail(`the panel followed the marker off the work area: ${JSON.stringify(followedPanel)}`);
+        }
+
+        checkPanelSide('panel after the follow drag', followedMarker, followedPanel, area);
       }
     }
   } finally {

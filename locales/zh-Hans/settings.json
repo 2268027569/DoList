@@ -8,8 +8,6 @@
   "mode.light": "浅色",
   "mode.dark": "深色",
   "mode.system": "跟随系统",
-  "alwaysOnTop.label": "面板保持置顶",
-  "alwaysOnTop.on": "开",
-  "alwaysOnTop.off": "关",
+  "opacity.label": "面板不透明度",
   "about.version": "v{version}"
 }
