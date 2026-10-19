@@ -142,7 +142,10 @@ export function createMarkerWindow(boot: BootParams): BrowserWindow {
       appearance: currentAppearance,
       bounds: window.getBounds(),
     });
-    smokeReady({ markerBounds: window.getBounds(), markerAnchor: currentAnchor });
+    // The anchored rectangle, not `getBounds()`: with auto-hide on, the watcher
+    // can park the marker before this runs, and a reader of the smoke context
+    // wants to know where the marker *lives*, not where it happens to be.
+    smokeReady({ markerBounds: bounds, markerAnchor: currentAnchor });
   });
 
   // The first state push waits for the document: sending before the marker
@@ -158,9 +161,10 @@ export function createMarkerWindow(boot: BootParams): BrowserWindow {
   void loadRenderer(window, 'marker', { ...boot, marker: currentAppearance });
   watchDisplayChanges();
   // Someone who left auto-hide on expects the marker to be parked right away.
-  // The harness is the exception: it aims its first drag at the boot bounds, so
-  // it starts the same policy on its first edge drag instead (§9.4).
-  if (!isSmokeEnabled()) syncEdgeHideWatch('boot');
+  // No harness exception here: the smoke script needs this same watcher to park
+  // and reveal the marker, and it reaches the sliver before its drag, so starting
+  // it at boot keeps the harness on the app's real path (§9.4).
+  syncEdgeHideWatch('boot');
   return window;
 }
 
@@ -278,6 +282,9 @@ function tickEdgeHide(): void {
   const config = currentEdgeHideConfig();
   if (window === null || window.isDestroyed() || config === null) return;
 
+  // The work area of the display the marker is anchored to, not the one under the
+  // cursor: a cursor on a second monitor is far away and should park it (§9.4).
+  const workArea = displayForAnchor(currentAnchor).workArea;
   const full = resolveMarkerBounds(currentAnchor, markerWindowSize(currentAppearance));
   const previous: EdgeHideState = edgeParked ? 'hidden' : 'shown';
   const next = nextEdgeHideState(
@@ -286,10 +293,12 @@ function tickEdgeHide(): void {
     full,
     currentAnchor.edge,
     config,
+    workArea,
   );
   if (next === previous) return;
 
-  const bounds = next === 'hidden' ? parkedRect(full, currentAnchor.edge, config.peek) : full;
+  const bounds =
+    next === 'hidden' ? parkedRect(full, currentAnchor.edge, config.peek, workArea) : full;
   if (bounds === null) return;
 
   edgeParked = next === 'hidden';

@@ -8,7 +8,10 @@
  *      up on a scaled display?
  *
  * It launches the built app with `YICHEN_SMOKE=1`, drives the real cursor with
- * PowerShell (`mouse_event`), and checks what the renderers reported.
+ * PowerShell (`mouse_event`), and checks what the renderers reported. Phases run
+ * in this order: boot state → edge auto-hide → drag → click → panel geometry.
+ * Auto-hide goes before the drag because it needs the edge anchor the marker has
+ * at boot, and the drag is what gives it up (§9.4).
  *
  * Usage:
  *   npm run build
@@ -45,8 +48,12 @@ const DRAG_DIP = { dx: -220, dy: 160 };
  * makes this assertion meaningful.
  */
 const DRAG_STEPS = 30;
-/** Position tolerance for the drag assertion, in DIPs. */
-const DRAG_TOLERANCE_DIP = 6;
+/**
+ * Position tolerance for the drag assertion, in DIPs. Tight because nothing is
+ * assumed any more: the expected landing is built from the cursor positions the
+ * harness actually observed (see `runDrag`), so only rounding is left.
+ */
+const DRAG_TOLERANCE_DIP = 3;
 
 /** Artwork size of the dot; the *window* is bigger where the OS demands it. */
 const MARKER_ARTWORK_SIZE = 28;
@@ -68,6 +75,8 @@ const PANEL_GAP_DIP = 8;
 const EDGE_HIDE = { peek: 5, revealDistance: 24, hideDistance: 48 };
 /** Tolerance for the parked position, in DIPs (rounding + fractional scaling). */
 const EDGE_HIDE_TOLERANCE_DIP = 2;
+/** How far the cursor may settle from an aimed point before the aim is retried. */
+const CURSOR_AIM_TOLERANCE_DIP = 4;
 /** The renderer swallows clicks for 300ms after a drag (§9.2). */
 const CLICK_SUPPRESSION_BACKOFF_MS = 450;
 
@@ -222,6 +231,71 @@ function distance(a, b) {
   return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y));
 }
 
+/**
+ * Moves the cursor to a point and re-aims until it actually settles there.
+ *
+ * `driveCursor` sets the position and reads it straight back, so a settle away
+ * from the target means something else moved the mouse. On a desktop shared with
+ * a human that is expected; retrying the *aim* — never the assertion — is what
+ * keeps the run meaningful instead of flaky.
+ */
+async function aimCursor(target, display, attempts = 4) {
+  let last = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    last = driveCursor({ bounds: { ...target, width: 0, height: 0 }, display });
+    if (last.settle === null) continue;
+    const offDip = distance(last.settle, last.physical) / last.scale;
+    if (offDip <= CURSOR_AIM_TOLERANCE_DIP) return last;
+    log(`aim attempt ${attempt}: cursor settled ${Math.round(offDip)} DIP off ${JSON.stringify(target)}`);
+    // Give a human hand mid-move time to let go before trying the same spot again.
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+  return last;
+}
+
+/**
+ * Point the cursor must reach to touch a marker parked on `edge`: the middle of
+ * the sliver it keeps inside the work area. Mirrors `parkedRect()` in
+ * src/shared/utils/edge-hide.ts — the geometry these assertions verify.
+ *
+ * The parked rectangle keeps the axis it did not move along, so the centre of
+ * that axis can be read straight off the marker's full rectangle. Aiming here is
+ * safe whether the marker is currently parked (the point is inside the sliver)
+ * or already shown (the point is within the exit distance, so it stays shown).
+ */
+function sliverPoint(area, rect, edge, peek) {
+  const alongX = rect.x + rect.width / 2;
+  const alongY = rect.y + rect.height / 2;
+  switch (edge) {
+    case 'left':
+      return { x: area.x + peek / 2, y: alongY };
+    case 'right':
+      return { x: area.x + area.width - peek / 2, y: alongY };
+    case 'top':
+      return { x: alongX, y: area.y + peek / 2 };
+    case 'bottom':
+      return { x: alongX, y: area.y + area.height - peek / 2 };
+    default:
+      return null; // 'free': the marker never parks, so there is nothing to reach
+  }
+}
+
+/** How much of `rect` stays inside the work area along the edge it parked on. */
+function visibleAlongEdge(area, rect, edge) {
+  switch (edge) {
+    case 'left':
+      return rect.x + rect.width - area.x;
+    case 'right':
+      return area.x + area.width - rect.x;
+    case 'top':
+      return rect.y + rect.height - area.y;
+    case 'bottom':
+      return area.y + area.height - rect.y;
+    default:
+      return null;
+  }
+}
+
 const PS1 = String.raw`
 param(
   [Parameter(Mandatory=$true)][int]$CenterX,
@@ -284,12 +358,16 @@ Write-Output "final:$($p.X),$($p.Y)"
  * or a landing outside tolerance). This desktop may be shared with a human, so a
  * bounded retry keeps the run honest without hiding a real defect.
  *
- * The expectation is the *end-to-end* claim: dragging the dot by N pixels must
- * leave it exactly N pixels away from where it started. It is built from the
- * scripted cursor path and the window bounds at the start of the attempt — never
- * from the cursor position read back mid-drag, which Chromium rewrites whenever a
- * captured drag moves the window (§9.1.1) and which would therefore accept a
- * wrong landing as "expected".
+ * The expectation is measured, not assumed: the marker must move by exactly as
+ * much as the cursor did. Both ends come from the harness's own cursor readings —
+ * `settle` right before the button goes down, `final` after it is released — and
+ * the start rectangle from the app's `drag-start` event. Nothing is derived from
+ * a cursor position read back mid-drag, which Chromium rewrites whenever a
+ * captured drag moves the window (§9.1.1).
+ *
+ * It is compared against `rawBounds`, the rectangle captured just before edge
+ * snapping runs: snapping legitimately moves the window afterwards, so the
+ * comparison must happen before it.
  */
 async function runDrag(startBounds, display, deltaDip, attempts = 3) {
   let bounds = startBounds;
@@ -301,22 +379,38 @@ async function runDrag(startBounds, display, deltaDip, attempts = 3) {
     const dragEnd = await waitForEvent('drag-end', 10_000, since);
     const start = await waitForEvent('drag-start', 2_000, since);
 
-    if (dragEnd === null) {
+    // A miss leaves the marker where it was, so re-aiming at the same rectangle
+    // is worth one retry; after that it is not the harness's aim that is wrong.
+    if (dragEnd === null && attempt >= 2) {
       lastFailure = 'no drag-end event: pointer events did not reach the marker window';
-      log(`attempt ${attempt}: ${lastFailure} — retrying`);
-    } else if (start === null) {
-      lastFailure = 'drag-start did not publish the grab point / offset';
+      break;
+    }
+
+    if (dragEnd === null || start === null) {
+      lastFailure =
+        dragEnd === null
+          ? 'no drag-end event: pointer events did not reach the marker window'
+          : 'drag-start did not publish the grab point / offset';
       log(`attempt ${attempt}: ${lastFailure} — retrying`);
     } else {
       const actual = dragEnd.detail?.rawBounds ?? {};
-      const netDip = {
-        x: (drive.scriptedEnd.x - drive.physical.x) / drive.scale,
-        y: (drive.scriptedEnd.y - drive.physical.y) / drive.scale,
-      };
-      const expected = { x: bounds.x + netDip.x, y: bounds.y + netDip.y };
+      const startRect = start.detail?.bounds ?? bounds;
+      // Where the cursor actually went, in DIPs. Falls back to the scripted
+      // delta if the driver failed to report its readings.
+      const cursorDip =
+        drive.settle === null || drive.final === null
+          ? {
+              x: (drive.scriptedEnd.x - drive.physical.x) / drive.scale,
+              y: (drive.scriptedEnd.y - drive.physical.y) / drive.scale,
+            }
+          : {
+              x: (drive.final.x - drive.settle.x) / drive.scale,
+              y: (drive.final.y - drive.settle.y) / drive.scale,
+            };
+      const expected = { x: startRect.x + cursorDip.x, y: startRect.y + cursorDip.y };
       const dx = Math.abs((actual.x ?? 0) - expected.x);
       const dy = Math.abs((actual.y ?? 0) - expected.y);
-      const landed = { dragEnd, start, drive, bounds, expected, actual, dx, dy };
+      const landed = { dragEnd, start, drive, expected, actual, dx, dy };
 
       if (dx <= DRAG_TOLERANCE_DIP && dy <= DRAG_TOLERANCE_DIP) return landed;
 
@@ -328,12 +422,13 @@ async function runDrag(startBounds, display, deltaDip, attempts = 3) {
         // reported as a broken application.
         (drive.settle === null
           ? ''
-          : ` — cursor settled ${distance(drive.settle, drive.physical)} physical px off the scripted path`);
+          : ` — cursor settled ${distance(drive.settle, drive.physical)} physical px off the aimed point`);
       log(`attempt ${attempt}: ${lastFailure} — retrying`);
+      // Re-aim at where the marker actually is now (`bounds` is post-snap). No
+      // sleep here: the cursor is still on the dot, and letting it drift away
+      // could park the marker at an edge, where a retry would miss it entirely.
       bounds = dragEnd.detail?.bounds ?? bounds;
     }
-
-    await new Promise((resolve) => setTimeout(resolve, CLICK_SUPPRESSION_BACKOFF_MS));
   }
 
   log(`drag failed after ${attempts} attempts: ${lastFailure}`);
@@ -449,8 +544,99 @@ async function main() {
       }
     }
 
-    // --- phase 1: drag ------------------------------------------------------
-    const drag = await runDrag(initial, display, DRAG_DIP);
+    /**
+     * The marker's boot rectangle, published once at `ready-to-show` and not
+     * touched by anything yet.
+     */
+    const bootRect = initial;
+
+    // --- phase 1: edge auto-hide --------------------------------------------
+    // Deliberately before the drag: at boot the marker is anchored to an edge —
+    // the only state where the park policy applies (§9.4) — and `ready-to-show`
+    // published both that anchor and its rectangle. Dragging first would leave a
+    // free anchor, and then there would be nothing to park.
+    const area = display?.workArea ?? display?.bounds ?? null;
+    const bootAnchor = readStatus()?.markerAnchor ?? null;
+
+    if (
+      area === null ||
+      bootAnchor === null ||
+      sliverPoint(area, bootRect, bootAnchor.edge, EDGE_HIDE.peek) === null
+    ) {
+      fail(
+        `the marker did not boot with an edge anchor, so auto-hide cannot apply: ` +
+          `${JSON.stringify({ workArea: area !== null, anchor: bootAnchor })}`,
+      );
+    } else {
+      const edge = bootAnchor.edge;
+
+      // Reach the sliver first. A parked marker comes back out here; a marker
+      // that is already shown stays shown, because the cursor lands within its
+      // exit distance. Either way the next step starts from a visible marker.
+      const settleSince = Date.now();
+      await aimCursor(sliverPoint(area, bootRect, edge, EDGE_HIDE.peek), display);
+      await waitForEvent('edge-reveal', 1_500, settleSince);
+
+      // Leave: the middle of the work area is far past the exit distance on any
+      // display big enough to run the app on.
+      const parkSince = Date.now();
+      await aimCursor(
+        { x: area.x + area.width / 2, y: area.y + area.height / 2 },
+        display,
+      );
+      const park = await waitForEvent('edge-park', 4_000, parkSince);
+
+      if (park === null) {
+        fail('the marker did not park after the cursor left the edge');
+      } else {
+        const parked = park.detail?.bounds ?? {};
+        const parkedEdge = park.detail?.edge ?? edge;
+        const visible = visibleAlongEdge(area, parked, parkedEdge);
+        if (visible !== null && Math.abs(visible - EDGE_HIDE.peek) <= EDGE_HIDE_TOLERANCE_DIP) {
+          pass(
+            `marker parked on the ${parkedEdge} edge, leaving ${visible}px of it inside the ` +
+              `work area (configured ${EDGE_HIDE.peek})`,
+            { parked, edge: parkedEdge },
+          );
+        } else {
+          fail(
+            `marker parked at ${JSON.stringify(parked)} on the ${parkedEdge} edge, i.e. ` +
+              `${visible}px inside the work area, expected ${EDGE_HIDE.peek}`,
+          );
+        }
+
+        // Return: aim at the sliver the marker left behind, whose geometry comes
+        // from the event itself rather than from an assumption about which edge.
+        const revealSince = Date.now();
+        driveCursor({
+          bounds: { ...sliverPoint(area, parked, parkedEdge, EDGE_HIDE.peek), width: 0, height: 0 },
+          display,
+        });
+        const reveal = await waitForEvent('edge-reveal', 4_000, revealSince);
+
+        if (reveal === null) {
+          fail('the marker did not come back out when the cursor reached the sliver');
+        } else {
+          const back = reveal.detail?.bounds ?? {};
+          if (distance(back, bootRect) <= EDGE_HIDE_TOLERANCE_DIP) {
+            pass('marker came back to its anchored position when the cursor approached', {
+              revealed: back,
+              anchored: bootRect,
+            });
+          } else {
+            fail(
+              `marker came back to ${JSON.stringify({ x: back.x, y: back.y })}, expected its ` +
+                `anchored ${JSON.stringify({ x: bootRect.x, y: bootRect.y })}`,
+            );
+          }
+        }
+      }
+    }
+
+    // --- phase 2: drag ------------------------------------------------------
+    // Runs after the park phase and from the boot rectangle, so the marker is
+    // visible, edge-anchored and not mid-animation.
+    const drag = await runDrag(bootRect, display, DRAG_DIP);
 
     if (drag === null) {
       fail('the marker did not follow the cursor across the desktop');
@@ -471,88 +657,13 @@ async function main() {
       pass('persisted anchor after drag', drag.dragEnd.detail?.anchor);
     }
 
-    /** Where the marker is right now, as the harness must aim at live bounds. */
-    let markerNow = drag?.dragEnd?.detail?.bounds ?? initial;
-
-    // --- phase 2: edge auto-hide --------------------------------------------
-    // The park policy only applies to an edge anchor (§9.4), so the marker is
-    // dragged flush against the right edge first. That drag ends with the cursor
-    // still on the dot — the visible state — so parking is proven by moving the
-    // cursor away, and revealing by aiming it back at the sliver.
-    const area = display?.workArea ?? display?.bounds ?? null;
-    if (area === null) {
-      fail('the work area of the marker display was not published, so the park geometry is unverifiable');
-    } else {
-      const flushRight = area.x + area.width - markerNow.width;
-      const edgeDrag = await runDrag(markerNow, display, { dx: flushRight - markerNow.x, dy: 0 });
-      const anchor = edgeDrag?.dragEnd?.detail?.anchor ?? null;
-      markerNow = edgeDrag?.dragEnd?.detail?.bounds ?? markerNow;
-
-      if (anchor === null || anchor.edge !== 'right') {
-        fail(`the marker did not anchor to the right edge, so auto-hide cannot apply: ${JSON.stringify(anchor)}`);
-      } else {
-        pass('the marker anchored to the right edge after the drag', anchor);
-      }
-
-      const parkSince = Date.now();
-      driveCursor({ bounds: { x: area.x + 60, y: area.y + 60, width: 0, height: 0 }, display });
-      const park = await waitForEvent('edge-park', 4_000, parkSince);
-
-      if (park === null) {
-        fail('the marker did not park after the cursor left the edge');
-      } else {
-        const parked = park.detail?.bounds ?? {};
-        const visible = area.x + area.width - parked.x;
-        if (Math.abs(visible - EDGE_HIDE.peek) <= EDGE_HIDE_TOLERANCE_DIP) {
-          pass(
-            `marker parked at the edge, leaving ${visible}px of it inside the work area ` +
-              `(configured ${EDGE_HIDE.peek})`,
-            { parked, edge: park.detail?.edge },
-          );
-        } else {
-          fail(
-            `marker parked at ${JSON.stringify(parked)}, i.e. ${visible}px inside the work area, ` +
-              `expected ${EDGE_HIDE.peek}`,
-          );
-        }
-      }
-
-      const revealSince = Date.now();
-      driveCursor({
-        bounds: {
-          x: area.x + area.width - EDGE_HIDE.peek / 2,
-          y: markerNow.y + markerNow.height / 2,
-          width: 0,
-          height: 0,
-        },
-        display,
-      });
-      const reveal = await waitForEvent('edge-reveal', 4_000, revealSince);
-
-      if (reveal === null) {
-        fail('the marker did not come back out when the cursor reached the sliver');
-      } else {
-        const back = reveal.detail?.bounds ?? {};
-        if (distance(back, markerNow) <= EDGE_HIDE_TOLERANCE_DIP) {
-          pass('marker came back to its anchored position when the cursor approached', {
-            revealed: back,
-            anchored: markerNow,
-          });
-        } else {
-          fail(
-            `marker came back to ${JSON.stringify(back)}, expected its anchored ` +
-              `${JSON.stringify({ x: markerNow.x, y: markerNow.y })}`,
-          );
-        }
-      }
-    }
-
     // --- phase 3: click -----------------------------------------------------
     // Click where the drag actually left the marker — its boot-time bounds are a
     // stale snapshot, and edge snapping may have nudged it on top of that — then
-    // wait out the post-drag click suppression.
+    // wait out the post-drag click suppression. The cursor stays on the dot
+    // through that wait, so the marker cannot park out from under the click.
     await new Promise((resolve) => setTimeout(resolve, CLICK_SUPPRESSION_BACKOFF_MS));
-    const clickTarget = markerNow;
+    const clickTarget = drag?.dragEnd?.detail?.bounds ?? bootRect;
 
     if (clickTarget === null) {
       fail('the marker position after the drag is unknown, so the click could not be aimed');
@@ -578,9 +689,9 @@ async function main() {
       // and its position from `placePanel`. Both are asserted here: a panel that
       // opened at the wrong size, or off the work area, is unusable.
       const panelBounds = panelEvent.detail?.panelBounds ?? null;
-      // `clickTarget` is the marker's live bounds at click time; do not read the
-      // first `drag-end` event back here, which with two drags in this run would
-      // be a stale position and would let a misplaced panel pass.
+      // `clickTarget` is the marker's live, post-snap rectangle at click time.
+      // Reading the boot snapshot back here instead would let a panel that opened
+      // next to the marker's *old* position pass, since the marker has moved.
       const markerAt = clickTarget ?? markerBounds();
 
       if (panelBounds === null || markerAt === null) {

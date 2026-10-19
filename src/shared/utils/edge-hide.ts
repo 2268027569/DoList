@@ -9,7 +9,7 @@ import type { MarkerEdge, Rect } from '../types/app';
  * the decision itself is pure and lives here, where it is unit-tested.
  */
 export interface EdgeHideConfig {
-  /** How many pixels of the marker stay inside the work area while parked. */
+  /** How many pixels of the marker window stay inside the work area while parked. */
   peek: number;
   /** Cursor distance to the parked sliver that brings the marker back out. */
   revealDistance: number;
@@ -29,27 +29,39 @@ export function distanceToRect(point: { x: number; y: number }, rect: Rect): num
 
 /**
  * The rectangle the window moves to when parked, or `null` for an edge that
- * never hides (`free`). Most of the marker ends up outside the work area, so
- * the anchor is deliberately *not* recomputed from this position — it stays the
- * anchored one, and {@link nextEdgeHideState} uses that anchored rect instead.
+ * never hides (`free`).
+ *
+ * `peek` is measured from the **work area**, not from the marker's anchored
+ * rectangle. The two differ whenever the anchor keeps an inset from the edge —
+ * the default anchor sits `offsetFromEdge: 12` in, so sliding by
+ * `width - peek` from there would leave 12px of inset *plus* the peek visible,
+ * i.e. a marker that never really hides.
+ *
+ * The position is therefore the same for every anchor along the same edge, and
+ * only the axis parallel to that edge comes from `full`.
  */
-export function parkedRect(full: Rect, edge: MarkerEdge, peek: number): Rect | null {
+export function parkedRect(
+  full: Rect,
+  edge: MarkerEdge,
+  peek: number,
+  workArea: Rect,
+): Rect | null {
   switch (edge) {
     case 'left': {
       const visible = clampPeek(peek, full.width);
-      return { ...full, x: full.x - full.width + visible };
+      return { ...full, x: workArea.x - full.width + visible };
     }
     case 'right': {
       const visible = clampPeek(peek, full.width);
-      return { ...full, x: full.x + full.width - visible };
+      return { ...full, x: workArea.x + workArea.width - visible };
     }
     case 'top': {
       const visible = clampPeek(peek, full.height);
-      return { ...full, y: full.y - full.height + visible };
+      return { ...full, y: workArea.y - full.height + visible };
     }
     case 'bottom': {
       const visible = clampPeek(peek, full.height);
-      return { ...full, y: full.y + full.height - visible };
+      return { ...full, y: workArea.y + workArea.height - visible };
     }
     case 'free':
       return null;
@@ -69,8 +81,9 @@ export function nextEdgeHideState(
   full: Rect,
   edge: MarkerEdge,
   config: EdgeHideConfig,
+  workArea: Rect,
 ): EdgeHideState {
-  const parked = parkedRect(full, edge, config.peek);
+  const parked = parkedRect(full, edge, config.peek, workArea);
   if (parked === null) return 'shown';
 
   // Approaching is measured against the sliver — the only part of a parked

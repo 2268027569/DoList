@@ -131,7 +131,7 @@ toDoList/
 
 | 包 | 用途 | 备注 |
 |---|---|---|
-| `better-sqlite3` | 本地数据库 | 原生模块：需针对 Electron ABI 重建，并 `asarUnpack` |
+| `better-sqlite3` | 本地数据库 | **Node-API 原生模块**（通过 `node-addon-api`）：ABI 无关，Electron 与开发机的 Node 加载同一份 prebuild，故 `prepare` 里的 `install-app-deps` 不是 ABI 重建而是 `asarUnpack` 等打包准备；打包仍需 `asarUnpack`（M02 S0 实测更正，见 §12） |
 | `electron-updater` | 自动更新 | 主进程使用，保留在 `node_modules` 中由其自行处理更新清单 |
 
 ### 开发与构建（`devDependencies`）
@@ -468,7 +468,7 @@ Chromium 在「指针捕获 + 窗口移动」时会重新定位系统光标（§
 - **M01 落地实现**：判定逻辑是纯函数 `nextEdgeHideState()` / `parkedRect()`（`src/shared/utils/edge-hide.ts`，8 个单测覆盖滞回、peek 夹取、free 锚点）；主进程只负责采样光标与 `setBounds`。
   - 判定与 `setBounds` 用的都是**锚点推出的矩形**，不是 `getBounds()`：已隐藏时实时 bounds 是那块故意留了 5px 在外面的矩形，用它判定会永远收不回来。
   - 拖拽开始前必须停表并把标记浮出（§9.2 的抓取点要相对真实 bounds 计算）；面板展开时也浮出——面板是按标记位置贴上去的，不该贴着一个 5px 小条。
-  - 冒烟脚本：用 `driveCursor` 把真实光标移到工作区角落（断言只剩 5px 在工作区内）再移回隐藏条（断言浮回锚点位置）；冒烟态下用固定的 `SMOKE_EDGE_HIDE` 策略，断言因此是确定的。phase 2 共 4 项断言。
+  - 冒烟脚本：park 与 reveal 放在**拖拽之前**（此时标记还是 boot 的吸附锚点，也是唯一会触发隐藏的状态），先把真实光标移到隐藏条上（若已隐藏则浮出、若已显示则保持显示，两种状态都收敛到"可见"），再把光标移到工作区中心触发隐藏、随后移回隐藏条触发浮出；断言只露 5px 与浮回锚点位置。冒烟态用固定的 `SMOKE_EDGE_HIDE` 策略，且 `syncEdgeHideWatch('boot')` 在冒烟下同样执行（否则脚本没有 watcher 可用），断言因此是确定的。phase 1 共 3 项断言。
 
 ### 9.5 展开/收起动画（好看且低耗的唯一正确做法）
 
@@ -556,7 +556,7 @@ Chromium 在「指针捕获 + 窗口移动」时会重新定位系统光标（§
 
 ## 11. 构建与发布
 
-- electron-builder 关键配置：`appId: com.yichen.todolist`、`productName: YiChen ToDo`、`asar: true` + `asarUnpack` 原生模块、`files` 白名单（排除源码与 devDeps 残留）、`npmRebuild: true`（better-sqlite3 对齐 Electron ABI）。
+- electron-builder 关键配置：`appId: com.yichen.todolist`、`productName: YiChen ToDo`、`asar: true` + `asarUnpack` 原生模块、`files` 白名单（排除源码与 devDeps 残留）、`npmRebuild: true`（对 Node-API 模块并非 ABI 必需，保留以覆盖将来可能引入的非 N-API 原生依赖）。
 - 产物：Windows `nsis`（含 `portable`）x64/arm64；macOS `dmg` + `zip`，`x64` + `arm64`（后续可出 Universal）。
 - 签名：Windows 需 OV/EV 证书（**需你提前申请**）；macOS 需 Developer ID + Apple 公证凭据，CI 中通过加密 Secrets 注入，绝不入库。
 - 更新：`electron-updater` + GitHub Releases，稳定/beta 双通道；更新说明取自 Release Notes。
@@ -570,7 +570,7 @@ Chromium 在「指针捕获 + 窗口移动」时会重新定位系统光标（§
 | 层级 | 覆盖对象 | 工具 |
 |---|---|---|
 | 单元 | 吸附/锚点还原算法、RRULE 展开、ICU 与格式化封装、同步合并与冲突判定、DB repository | Vitest（`src/shared` 纯函数优先，天然可测） |
-| 集成 | 迁移链（空库 → 最新版）、备份与恢复、导入导出往返一致性 | Vitest + 临时目录真实 SQLite |
+| 集成 | 迁移链（空库 → 最新版）、仓储层 CRUD、约束与软删过滤 | Vitest + 临时目录真实 SQLite（`src/main/db/test-db.ts` 的 `withTempDatabase()`：临时目录 → `openDatabase` → `migrate` → 跑断言 → 关库并连同 `-wal` / `-shm` 一起清理） |
 | E2E | 标记拖拽/吸附、展开收起动画、任务 CRUD、通知触发、快捷键 | Playwright for Electron |
 | 手动验收 | 多显示器、DPI 125%/150%、休眠唤醒、断电恢复、RTL 布局 | 验收清单（docs 内维护） |
 
