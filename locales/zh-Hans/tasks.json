@@ -14,6 +14,7 @@
   "status.cancelled": "已取消",
   "row.markDone": "标记为已完成",
   "row.markUndone": "标记为未完成",
+  "row.dragHandle": "拖动排序",
   "detail.heading": "任务详情",
   "detail.back": "返回列表",
   "detail.title": "标题",

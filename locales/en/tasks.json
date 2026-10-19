@@ -14,6 +14,7 @@
   "status.cancelled": "Cancelled",
   "row.markDone": "Mark done",
   "row.markUndone": "Mark not done",
+  "row.dragHandle": "Drag to reorder",
   "detail.heading": "Task details",
   "detail.back": "Back to the list",
   "detail.title": "Title",

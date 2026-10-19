@@ -297,6 +297,18 @@ export function queryTasks(filter: TaskFilter = {}): Task[] {
  * ignored rather than stealing a position. Rewriting the whole group is a single
  * small transaction on a local file — far cheaper than the fractional-rank
  * bookkeeping that would otherwise be needed to insert in the middle.
+ *
+ * `ids` may be a subset — the panel passes what its view is showing, and a done
+ * task in the same group is not in that view. The rest of the group is therefore
+ * read first and appended after the named rows in its own order, which keeps
+ * `sort_order` a clean 0…n-1 sequence across the whole group. Writing only the
+ * named rows would leave the others holding positions in the middle of that
+ * sequence, and a later view that shows both would draw two rows with the same
+ * `sort_order` in whatever order the table happened to be in.
+ *
+ * Returns how many rows actually moved. A row already sitting where it is asked to
+ * sit keeps its `updated_at`, so a partial reorder does not mark rows the user
+ * never touched as modified — M08 resolves sync conflicts by that timestamp.
  */
 export function reorderTasks(
   scope: ReorderScope,
@@ -307,13 +319,27 @@ export function reorderTasks(
 
   const db = getDatabase();
   const { where, params: scopeParams } = scopeSql(scope);
+  const group = db
+    .prepare(`SELECT id, sort_order FROM tasks WHERE ${where} ORDER BY sort_order, rowid`)
+    .all(...scopeParams) as { id: string; sort_order: number }[];
+
+  const named = new Set(ids);
+  const sequence = [
+    ...ids,
+    ...group.filter((row) => !named.has(row.id)).map((row) => row.id),
+  ];
+  const positionOf = new Map(group.map((row) => [row.id, row.sort_order]));
+
   const update = db.prepare(
     `UPDATE tasks SET sort_order = ?, updated_at = ? WHERE id = ? AND ${where}`,
   );
 
   const run = db.transaction(() => {
     let affected = 0;
-    ids.forEach((id, index) => {
+    sequence.forEach((id, index) => {
+      // `positionOf` has no entry for an id from another group: the update below
+      // matches nothing, and the count of moved rows stays honest.
+      if (positionOf.get(id) === index) return;
       affected += update.run(index, now, id, ...scopeParams).changes;
     });
     return affected;

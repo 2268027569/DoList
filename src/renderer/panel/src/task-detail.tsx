@@ -51,10 +51,11 @@ const INPUT =
  * the field is left (or on Enter); a switch commits as it is thrown.
  *
  * Every control carries a `data-field` name. They are what the smoke harness reads
- * to find out where the keyboard went (§13): it reaches this view by pressing Tab
- * and cannot count presses, because the first key posted after the window settles
- * is sometimes swallowed. New controls get a name too, or the harness cannot ask
- * for them.
+ * to find out where the keyboard went (§13): it attaches to this page over the
+ * DevTools protocol and puts the keyboard on a control **by name**, rather than
+ * counting Tab presses — which never worked, because Chromium only honours focus
+ * navigation while the window really holds the foreground. New controls get a name
+ * too, or the harness cannot ask for them.
  */
 export function TaskDetail({
   task,
@@ -409,8 +410,8 @@ function Choice({
     <button
       type="button"
       aria-pressed={active}
-      // The keyboard stop's name, read by the smoke harness through the panel's
-      // one focus listener (App.tsx). See the note at the top of this file.
+      // The name the smoke harness puts the keyboard on (§13). See the note at the
+      // top of this file.
       data-field={field}
       onClick={onClick}
       className={`rounded-md border px-2 py-1 text-xs transition-colors ${

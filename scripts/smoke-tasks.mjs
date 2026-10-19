@@ -13,13 +13,15 @@
  *   5. the panel re-fetches and re-draws (`tasks-rendered`),
  *   6. the row is actually in SQLite — read straight from the smoke database,
  *   7. the detail view opens on that row and its due date and priority are changed
- *      (slice S4), and
- *   8. a fresh launch reads those same values back off the disk.
+ *      (slice S4),
+ *   8. the row is moved with Alt+↓, moved back with Alt+↑, and moved down again by
+ *      dragging its grip over the row below it (slice S5), and
+ *   9. a fresh launch reads those same values and that same order back off the disk.
  *
  * Only two things come from the OS: the global shortcut, which a registered hotkey
  * only ever sees when the input queue produced it, and the app's own launch. Every
- * other keystroke is delivered to the panel page over the DevTools protocol, which
- * is explained where the client is built below.
+ * other keystroke — and the drag — is delivered to the panel page over the DevTools
+ * protocol, which is explained where the client is built below.
  *
  * The run touches neither the cursor nor the foreground window: an injected click
  * only lends the panel a foreground the injecting console takes back, which the
@@ -237,20 +239,53 @@ async function activeField(cdp) {
   );
 }
 
+/**
+ * The keys this harness knows, with the virtual codes and — for Enter — the
+ * character Chromium needs to run the same default action a typed one would
+ * (activating a button, submitting through a field).
+ */
+const KEYS = {
+  Enter: { code: 'Enter', virtualKey: 13, text: '\r' },
+  Tab: { code: 'Tab', virtualKey: 9 },
+  Escape: { code: 'Escape', virtualKey: 27 },
+  ArrowUp: { code: 'ArrowUp', virtualKey: 38 },
+  ArrowDown: { code: 'ArrowDown', virtualKey: 40 },
+};
+
+/** The protocol's modifier bit mask; only Alt is needed, by the reorder shortcut. */
+const ALT = 1;
+
 /** A key press delivered by the renderer itself, so no OS queue is involved. */
-async function pressKey(cdp, key) {
-  const virtualKey = { Enter: 13, Tab: 9, Escape: 27 }[key] ?? 0;
+async function pressKey(cdp, key, modifiers = 0) {
+  const spec = KEYS[key];
+  if (spec === undefined) throw new Error(`the harness has no key spec for "${key}"`);
+
   const base = {
     key,
-    code: key,
-    windowsVirtualKeyCode: virtualKey,
-    nativeVirtualKeyCode: virtualKey,
+    code: spec.code,
+    windowsVirtualKeyCode: spec.virtualKey,
+    nativeVirtualKeyCode: spec.virtualKey,
+    modifiers,
   };
-  // Enter carries a character so Chromium runs the same default action a typed one
-  // does (activating a button or submitting through the field).
-  const withText = key === 'Enter' ? { ...base, text: '\r', unmodifiedText: '\r' } : base;
+  const withText =
+    spec.text === undefined ? base : { ...base, text: spec.text, unmodifiedText: spec.text };
+
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...withText });
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+}
+
+/**
+ * Runs some JavaScript in the panel page and requires a truthy answer, so a step
+ * that could not be set up at all is reported as a failed check rather than as an
+ * application that ignored its input.
+ */
+async function requireEval(cdp, expression, description) {
+  const value = await evaluate(cdp, expression);
+  if (value === null || value === undefined || value === false) {
+    fail(`could not ${description}`);
+    return null;
+  }
+  return value;
 }
 
 /** Types text as key events: no IME can compose it and no queue can swallow it. */
@@ -464,6 +499,82 @@ async function pressKeyAndWait(cdp, key, timeoutMs = 8_000) {
   const since = Date.now();
   await pressKey(cdp, key);
   return waitForEvent('task-changed', timeoutMs, since);
+}
+
+/** Presses a key with a modifier held and reports the write the app announced. */
+async function pressKeyWithModifier(cdp, key, modifiers, timeoutMs = 8_000) {
+  const since = Date.now();
+  await pressKey(cdp, key, modifiers);
+  return waitForEvent('task-changed', timeoutMs, since);
+}
+
+/**
+ * Drags one row's grip onto another row with synthesized mouse input.
+ *
+ * Chromium turns these into pointer events, so the panel's own pointer handlers run
+ * — capture included — with no real mouse and no window in the foreground. The
+ * coordinates come from the page's own rectangles, so nothing here has to know
+ * where the window sits on the screen.
+ *
+ * `below` picks which half of the target row to aim for, since which edge the drop
+ * lands on is exactly what decides where the row ends up.
+ */
+async function dragGripOntoRow(cdp, fromId, toId, below) {
+  const points = await requireEval(
+    cdp,
+    `(() => {
+       const pick = (field, id) =>
+         document.querySelector('[data-field="' + field + '"][data-task-id="' + id + '"]');
+       const grip = pick('task-grip', ${JSON.stringify(fromId)});
+       const target = document.querySelector('li[data-task-id="' + ${JSON.stringify(toId)} + '"]');
+       if (grip === null || target === null) return null;
+       const grabbed = grip.getBoundingClientRect();
+       // The whole row box, not the title: aiming just outside the target's vertical
+       // middle is what decides which side of it the row lands on.
+       const onto = target.getBoundingClientRect();
+       return {
+         x: grabbed.left + grabbed.width / 2,
+         y: grabbed.top + grabbed.height / 2,
+         toY: ${below === true ? 'onto.bottom - 2' : 'onto.top + 2'},
+       };
+     })()`,
+    'measure the rows to drag between',
+  );
+  if (points === null) return null;
+
+  const since = Date.now();
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mousePressed',
+    x: points.x,
+    y: points.y,
+    button: 'left',
+    buttons: 1,
+    clickCount: 1,
+  });
+  // Two moves, so the gesture reads as a drag rather than a press that never left.
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: points.x,
+    y: points.y + 8,
+    button: 'left',
+    buttons: 1,
+  });
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: points.x,
+    y: points.toY,
+    button: 'left',
+    buttons: 1,
+  });
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseReleased',
+    x: points.x,
+    y: points.toY,
+    button: 'left',
+    buttons: 0,
+    clickCount: 1,
+  });
+  return waitForEvent('task-changed', 8_000, since);
 }
 
 async function main() {
@@ -713,14 +824,68 @@ async function main() {
       fail(`the list drew ${JSON.stringify(backToList?.detail?.rows?.[0] ?? null)}, expected priority 3 and a due chip`);
     }
 
+    // --- phase 4c: the row moves inside its group (slice S5) ------------------
+    // Alt+↑/↓ is the reorder a keyboard can reach, and the one a harness can take
+    // without a pointer at all.
+    await gotoField(cdp, 'task-title', firstId);
+    const movedDown = await pressKeyWithModifier(cdp, 'ArrowDown', ALT);
+    if (movedDown?.detail?.kind === 'reordered') {
+      pass('Alt+↓ moved the focused row down', movedDown.detail);
+    } else {
+      fail(`Alt+↓ produced no reorder: ${JSON.stringify(movedDown?.detail ?? null)}`);
+    }
+
+    const movedRender = await waitForEvent('tasks-rendered', 5_000, movedDown?.at ?? 0);
+    if (
+      movedRender?.detail?.titles?.[0] === SECOND_TASK &&
+      movedRender?.detail?.titles?.[1] === FIRST_TASK
+    ) {
+      pass('the list drew the swapped order', movedRender.detail.titles);
+    } else {
+      fail(`the list drew ${JSON.stringify(movedRender?.detail?.titles ?? null)}, expected the two rows swapped`);
+    }
+
+    // React re-attaches a row when the order changes, and an element that was
+    // detached loses the focus with it: without the panel putting the caret back,
+    // the second Alt+↑ would go nowhere at all.
+    const focusAfterMove = await activeField(cdp);
+    if (focusAfterMove === 'task-title') {
+      pass('the moved row still holds the focus, so the shortcut repeats');
+    } else {
+      fail(`the caret is on "${focusAfterMove}" after a move, expected the moved row's title`);
+    }
+
+    const movedUp = await pressKeyWithModifier(cdp, 'ArrowUp', ALT);
+    rows = readTasks();
+    if (movedUp?.detail?.kind === 'reordered' && rows[0].title === FIRST_TASK) {
+      pass('Alt+↑ put the row back where it started', { order: rows.map((row) => row.title) });
+    } else {
+      fail(`Alt+↑ did not restore the order: ${JSON.stringify(rows.map((row) => row.title))}`);
+    }
+
+    // And the same move by hand: grip → the row below it.
+    const dragged = await dragGripOntoRow(cdp, firstId, rows[1].id, true);
+    rows = readTasks();
+    if (dragged?.detail?.kind === 'reordered' && rows[1].title === FIRST_TASK) {
+      pass('dragging the grip over the row below moved it there', {
+        order: rows.map((row) => row.title),
+      });
+    } else {
+      fail(`the drag produced ${JSON.stringify(dragged?.detail ?? null)} and the order ${JSON.stringify(rows.map((row) => row.title))}`);
+    }
+
     // --- phase 5: the edits are still there after a restart -------------------
     // A second launch of the same build against the same database file: what the
     // panel shows now came off the disk rather than out of the first run's memory.
     // The rows are read once more before the app is stopped, so a database that
     // went missing would be reported here rather than as an app that lost its data.
     const beforeRestart = readTasks();
-    if (beforeRestart.length === 2 && beforeRestart[0].priority === 3) {
-      pass('the edits are on disk before the restart', beforeRestart[0]);
+    if (
+      beforeRestart.length === 2 &&
+      beforeRestart[0].title === SECOND_TASK &&
+      beforeRestart[1].priority === 3
+    ) {
+      pass('the moved order and the edits are on disk before the restart', beforeRestart);
     } else {
       fail(`the database reads ${JSON.stringify(beforeRestart)} just before the restart`);
     }
@@ -748,12 +913,13 @@ async function main() {
       fail(`the restarted app drew ${JSON.stringify(restartRender?.detail ?? null)}, expected two rows`);
     }
     if (
-      restartRender?.detail?.rows?.[0]?.priority === 3 &&
-      restartRender?.detail?.rows?.[0]?.due !== null
+      restartRender?.detail?.rows?.[0]?.title === SECOND_TASK &&
+      restartRender?.detail?.rows?.[1]?.priority === 3 &&
+      restartRender?.detail?.rows?.[1]?.due !== null
     ) {
-      pass('the restarted app shows the edited priority and due chip', restartRender.detail.rows[0]);
+      pass('the restarted app read the moved order and the edits back', restartRender.detail.rows);
     } else {
-      fail(`after the restart the first row reads ${JSON.stringify(restartRender?.detail?.rows?.[0] ?? null)}`);
+      fail(`after the restart the list reads ${JSON.stringify(restartRender?.detail?.rows ?? null)}`);
     }
   } finally {
     if (cdp !== null) cdp.close();

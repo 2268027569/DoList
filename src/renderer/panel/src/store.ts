@@ -2,7 +2,8 @@ import { create } from 'zustand';
 
 import type { TaskPatchInput, TaskQueryInput } from '@shared/contracts/task';
 import type { BootParams, PanelState } from '@shared/types/app';
-import type { TaskWithTags } from '@shared/types/task';
+import type { ReorderScope, TaskWithTags } from '@shared/types/task';
+import { moveWithin } from '@shared/utils/sort-order';
 
 /**
  * The Inbox: top-level tasks that are still open and belong to no list
@@ -10,6 +11,9 @@ import type { TaskWithTags } from '@shared/types/task';
  * yet — views with their own filters are M03.
  */
 const INBOX_FILTER: TaskQueryInput = { listId: null, parentId: null, status: ['todo', 'doing'] };
+
+/** The group the list's manual order lives in, which is also what a move rewrites. */
+const INBOX_SCOPE: ReorderScope = { kind: 'top', listId: null };
 
 export type TasksStatus = 'loading' | 'ready' | 'error';
 
@@ -42,6 +46,11 @@ interface PanelStore {
   addTask: (title: string) => Promise<boolean>;
   /** Ticks a task done, or puts it back to `todo`. */
   toggleTask: (id: string, done: boolean) => Promise<void>;
+  /**
+   * Moves a row to `to` inside the Inbox group, writing the group's order back
+   * (M02 D3). Resolves to `false` when there was nothing to move.
+   */
+  moveTask: (id: string, to: number) => Promise<boolean>;
 
   /** Opens the detail on `id` and reads its row. */
   openTaskDetail: (id: string) => Promise<void>;
@@ -98,6 +107,29 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
   toggleTask: async (id, done) => {
     const result = await window.api.task.update(id, { status: done ? 'done' : 'todo' });
     if (!result.ok) set({ tasksStatus: 'error' });
+  },
+
+  moveTask: async (id, to) => {
+    const current = get().tasks;
+    const from = current.findIndex((task) => task.id === id);
+    if (from < 0) return false;
+
+    const ids = current.map((task) => task.id);
+    const next = moveWithin(ids, from, to);
+    // The same array by reference means the row would not move: sending it anyway
+    // would be a write, a reorder event and a re-fetch for nothing.
+    if (next === ids) return false;
+
+    // Only the rows this view is showing are sent. The rest of the group — a done
+    // task, which the Inbox filter leaves out — is parked after them by the
+    // repository, so the visible sequence is exactly the one stored and the group
+    // still ends up a clean 0…n-1 (reorderTasks).
+    const result = await window.api.task.reorder(INBOX_SCOPE, [...next]);
+    // Same failure surface as the other writes here: the order did not change, so
+    // the list still shows the truth, but the user should not be left believing the
+    // move was stored.
+    if (!result.ok) set({ tasksStatus: 'error' });
+    return result.ok;
   },
 
   openTaskDetail: async (id) => {

@@ -394,6 +394,29 @@ describe('reorderTasks', () => {
     });
   });
 
+  it('keeps the group a clean sequence when the caller names only part of it', () => {
+    withTempDatabase(() => {
+      const done = createTask({ title: 'done' }, NOW);
+      const first = createTask({ title: 'a' }, NOW);
+      const second = createTask({ title: 'b' }, NOW);
+      updateTask(done.id, { status: 'done' }, NOW + 1);
+
+      // The panel's Inbox filter leaves the done row out of the list it shows, so
+      // the reorder it sends names only the two open rows.
+      expect(
+        reorderTasks({ kind: 'top', listId: null }, [second.id, first.id], NOW + 5),
+      ).toBe(2);
+
+      const group = queryTasks({ listId: null });
+      expect(group.map((task) => task.id)).toEqual([second.id, first.id, done.id]);
+      // A clean 0…n-1 with no two rows sharing a position, the done row parked at
+      // the tail rather than holding a slot in the middle.
+      expect(group.map((task) => task.sortOrder)).toEqual([0, 1, 2]);
+      // `first` was already at 1: it did not move, so it was not marked as changed.
+      expect(getTask(first.id)?.updatedAt).toBe(NOW);
+    });
+  });
+
   it('orders the subtasks inside their parent', () => {
     withTempDatabase(() => {
       const parent = createTask({ title: 'parent' }, NOW);
