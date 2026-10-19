@@ -106,6 +106,32 @@ export const taskIdsInput = z.object({ ids: idList });
 
 export const taskReorderInput = z.object({ scope: reorderScopeInput, ids: idList });
 
+/**
+ * One command applied to many rows at once (M02 S7).
+ *
+ * The kinds are closed, and they are the three a selection is actually for: tick
+ * them off, give them the same priority, drop them. Text fields are deliberately
+ * absent — "set the same title on 20 rows" is not an operation anyone asked for,
+ * and each row's title is what makes it a task of its own.
+ *
+ * A `delete` here is the same soft delete the single-row channel does, cascade
+ * included, so the recycle bin stays the one place that knows what was dropped.
+ */
+export const taskBulkInput = z.object({
+  ids: idList,
+  op: z.discriminatedUnion('kind', [
+    z.object({ kind: z.literal('complete') }),
+    z.object({ kind: z.literal('priority'), priority }),
+    z.object({ kind: z.literal('delete') }),
+  ]),
+});
+
+/** An attachment keeps its file where it is; only the path is stored (S7). */
+export const attachmentListInput = z.object({ taskId: identifier });
+export const attachmentAddInput = z.object({ taskId: identifier });
+export const attachmentRemoveInput = z.object({ id: identifier });
+export const attachmentOpenInput = z.object({ id: identifier });
+
 export const taskQueryInput = z.object({
   listId: identifier.nullable().optional(),
   status: z.union([status, z.array(status).min(1).max(TASK_STATUSES.length)]).optional(),
@@ -122,6 +148,8 @@ export const taskQueryInput = z.object({
 export type TaskCreateInput = z.infer<typeof taskCreateInput>;
 export type TaskPatchInput = z.infer<typeof taskPatchInput>;
 export type TaskQueryInput = z.infer<typeof taskQueryInput>;
+export type TaskBulkInput = z.infer<typeof taskBulkInput>;
+export type TaskBulkOp = TaskBulkInput['op'];
 
 /** Compile-time proof that the wire contract still covers the repository's filter. */
 export type TaskQueryCoversFilter = TaskQueryInput extends TaskFilter ? true : never;
@@ -132,8 +160,20 @@ export type ReorderScopeCoversScope = ReorderScope extends z.infer<
   ? true
   : never;
 
-/** `kind` describes what happened; the panel re-fetches rather than patching a mirror. */
-export type TaskChangeKind = 'created' | 'updated' | 'deleted' | 'restored' | 'reordered';
+/**
+ * `kind` describes what happened; the panel re-fetches rather than patching a mirror.
+ *
+ * `undone` is its own kind rather than a replay of the write it reverses: the panel
+ * reports what the stack did, and the rows it touched may include ones the original
+ * write created (a tick's next occurrence) that are now gone again.
+ */
+export type TaskChangeKind =
+  | 'created'
+  | 'updated'
+  | 'deleted'
+  | 'restored'
+  | 'reordered'
+  | 'undone';
 
 export interface TaskChangedPayload {
   kind: TaskChangeKind;
@@ -141,4 +181,13 @@ export interface TaskChangedPayload {
   ids: string[];
   /** Set by `reordered`: the group whose order this describes. */
   scope?: ReorderScope;
+}
+
+/**
+ * What `task:undo` answers: the rows the undo touched, or `null` when the stack was
+ * empty. An empty stack is not a failure — the user pressed the shortcut one time
+ * too many — so it comes back as a value, not as an error (M02 D7).
+ */
+export interface TaskUndoResult {
+  ids: string[];
 }

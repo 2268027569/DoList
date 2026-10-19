@@ -24,6 +24,7 @@ import { refreshTray } from '../platform/tray';
 import { smokeRecord } from '../platform/smoke';
 import { appSettings, updateAppSettings, writeMarkerAnchor } from '../services/settings';
 import { broadcastLocale, broadcastTheme } from '../services/broadcast';
+import { attachmentChannelHandlers } from './handlers/attachment';
 import { taskChannelHandlers } from './handlers/task';
 import { invalid } from './validate';
 import {
@@ -157,6 +158,7 @@ export function registerIpcHandlers(): void {
   // The task domain registers through the same helper, so its payloads go through
   // the same validation and exception guard as everything above.
   for (const { channel, run } of taskChannelHandlers()) handle(channel, run);
+  for (const { channel, run } of attachmentChannelHandlers()) handle(channel, run);
 
   log(`registered ${handlerCount} channels`);
 }

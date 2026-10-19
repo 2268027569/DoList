@@ -1,6 +1,7 @@
 import { IPC } from '@shared/contracts/channels';
 import { fail, ok } from '@shared/contracts/result';
 import {
+  taskBulkInput,
   taskCreateInput,
   taskGetInput,
   taskIdsInput,
@@ -11,12 +12,14 @@ import {
 
 import { notifyTasksChanged } from '../../services/task-events';
 import {
+  bulkTasks,
   createTaskFromInput,
   deleteTasks,
   listTasks,
   readTask,
   reorderTaskGroup,
   restoreTasks,
+  undoLastWrite,
   updateTaskFromPatch,
 } from '../../services/tasks';
 import { invalid } from '../validate';
@@ -108,6 +111,29 @@ export function taskChannelHandlers(): ChannelHandler[] {
         const { affected, change } = reorderTaskGroup(parsed.data.scope, parsed.data.ids);
         if (affected > 0) notifyTasksChanged(change);
         return ok({ affected });
+      },
+    },
+    {
+      channel: IPC.task.bulk,
+      run: (payload) => {
+        const parsed = taskBulkInput.safeParse(payload);
+        if (!parsed.success) return invalid(IPC.task.bulk, parsed.error.issues);
+        // The whole selection is one write here, so it is also one notification
+        // and one entry on the undo stack — which is the point of the channel.
+        const { affected, change } = bulkTasks(parsed.data);
+        if (affected > 0) notifyTasksChanged(change);
+        return ok({ affected });
+      },
+    },
+    {
+      channel: IPC.task.undo,
+      run: () => {
+        const change = undoLastWrite();
+        // An empty stack answers `null` rather than an error: pressing the
+        // shortcut one time too many is a no-op, not a failure (M02 D7).
+        if (change === null) return ok(null);
+        notifyTasksChanged(change);
+        return ok({ ids: change.ids });
       },
     },
   ];

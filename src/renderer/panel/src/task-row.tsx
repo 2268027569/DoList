@@ -33,10 +33,13 @@ export interface TaskRowProps {
   task: TaskListItem;
   /** Position inside the group, which is what a move is measured from. */
   index: number;
+  /** Whether this row is part of the list's multi-selection (M02 S7). */
+  selected: boolean;
   /** How far this row is following the pointer while it is the one being dragged. */
   dragOffsetY: number | null;
   /** Which edge of this row a drop would land on, when this row is the target. */
   dropEdge: DropEdge | null;
+  onSelect: (id: string) => void;
   onGripPointerDown: (id: string, index: number, event: ReactPointerEvent<HTMLElement>) => void;
   onGripPointerMove: (event: ReactPointerEvent<HTMLElement>) => void;
   onGripPointerUp: (event: ReactPointerEvent<HTMLElement>) => void;
@@ -45,18 +48,21 @@ export interface TaskRowProps {
 }
 
 /**
- * One line of the Inbox: a done circle, the title, the at-a-glance chips, a grip.
+ * One line of the Inbox: a selection box, a done circle, the title, the at-a-glance
+ * chips, a grip.
  *
- * Memoized: its props are the task, its position and the two drag-related fields,
- * all of which stay the same for a row that is neither being dragged nor pointed at
- * by the drop line. During a drag that is every row but two, and a drag re-renders
- * the list on every pointer move (TaskList).
+ * Memoized: its props are the task, its position, whether it is selected and the two
+ * drag-related fields, all of which stay the same for a row that is neither being
+ * dragged nor pointed at by the drop line. During a drag that is every row but two,
+ * and a drag re-renders the list on every pointer move (TaskList).
  */
 export const TaskRow = memo(function TaskRow({
   task,
   index,
+  selected,
   dragOffsetY,
   dropEdge,
+  onSelect,
   onGripPointerDown,
   onGripPointerMove,
   onGripPointerUp,
@@ -88,13 +94,36 @@ export const TaskRow = memo(function TaskRow({
       // The row itself answers to the task id so a caller can measure it: the
       // smoke harness aims at one row's box to drag another onto it (§13).
       data-task-id={task.id}
+      aria-selected={selected}
       className={`group flex items-start gap-2 rounded-lg px-1.5 py-1.5 hover:bg-[var(--bg-surface-muted)] ${
-        dropEdge === null ? '' : DROP_EDGE_CLASS[dropEdge]
-      } ${dragOffsetY === null ? '' : 'relative z-10 opacity-90'}`}
+        selected ? 'bg-[var(--bg-surface-muted)]' : ''
+      } ${dropEdge === null ? '' : DROP_EDGE_CLASS[dropEdge]} ${
+        dragOffsetY === null ? '' : 'relative z-10 opacity-90'
+      }`}
       // Only the dragged row moves, and only by transform: the rest of the list is
       // left alone so a long list costs one compositor property per frame (§9.5).
       style={dragOffsetY === null ? undefined : { transform: `translateY(${dragOffsetY}px)` }}
     >
+      {/*
+       * The multi-select box (M02 S7). Hidden until the row is under the pointer —
+       * the list is meant to look like a list of tasks — but never hidden while it
+       * is checked or focused: a control that cannot be seen cannot be used.
+       */}
+      <button
+        type="button"
+        role="checkbox"
+        aria-checked={selected}
+        aria-label={t(selected ? 'row.deselect' : 'row.select')}
+        data-field="row-select"
+        data-task-id={task.id}
+        onClick={() => onSelect(task.id)}
+        className={`mt-0.5 size-4 shrink-0 rounded border transition-opacity ${
+          selected
+            ? 'border-[var(--accent)] bg-[var(--accent)] opacity-100'
+            : 'border-[var(--border-strong)] opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+        }`}
+      />
+
       <button
         type="button"
         role="checkbox"

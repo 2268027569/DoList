@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent, ReactElement } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import type { TaskPriority } from '@shared/types/task';
 import { dropEdge, landingIndex } from '@shared/utils/sort-order';
 import { dueChip } from '@shared/utils/task-due-label';
 import { progressText } from '@shared/utils/task-tree';
@@ -14,6 +15,13 @@ interface RowBand {
   top: number;
   height: number;
 }
+
+/**
+ * The priority the bulk bar raises a selection to (M02 S7). One button rather than a
+ * four-way switch, because a bar that pops up over the list has no room for a form —
+ * a selection is raised to "high" or left alone.
+ */
+const BULK_PRIORITY: TaskPriority = 3;
 
 /** The drag in flight: what is moving, where from, and where it would land. */
 interface DragState {
@@ -44,6 +52,8 @@ export function TaskList(): ReactElement {
   const tasks = usePanelStore((state) => state.tasks);
   const status = usePanelStore((state) => state.tasksStatus);
   const moveTask = usePanelStore((state) => state.moveTask);
+  const selectedIds = usePanelStore((state) => state.selectedIds);
+  const toggleSelected = usePanelStore((state) => state.toggleSelected);
 
   const listRef = useRef<HTMLUListElement>(null);
   /** The live gesture. A ref, not state: it must be current on the very next event. */
@@ -172,20 +182,88 @@ export function TaskList(): ReactElement {
   }
 
   return (
-    <ul ref={listRef} className="flex flex-col gap-0.5">
-      {tasks.map((task, index) => (
-        <TaskRow
-          key={task.id}
-          task={task}
-          index={index}
-          dragOffsetY={drag !== null && drag.id === task.id ? drag.offsetY : null}
-          dropEdge={dropEdge(drag, index)}
-          onGripPointerDown={onGripPointerDown}
-          onGripPointerMove={onGripPointerMove}
-          onGripPointerUp={onGripPointerUp}
-          onMove={onMove}
-        />
-      ))}
-    </ul>
+    <div className="flex flex-col gap-1.5">
+      {selectedIds.length > 0 ? <BulkBar /> : null}
+      <ul ref={listRef} className="flex flex-col gap-0.5">
+        {tasks.map((task, index) => (
+          <TaskRow
+            key={task.id}
+            task={task}
+            index={index}
+            selected={selectedIds.includes(task.id)}
+            dragOffsetY={drag !== null && drag.id === task.id ? drag.offsetY : null}
+            dropEdge={dropEdge(drag, index)}
+            onSelect={toggleSelected}
+            onGripPointerDown={onGripPointerDown}
+            onGripPointerMove={onGripPointerMove}
+            onGripPointerUp={onGripPointerUp}
+            onMove={onMove}
+          />
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * What a multi-selection can do (M02 S7): tick the rows off, give them one priority,
+ * drop them, or let the selection go.
+ *
+ * It appears only while something is selected, so the list keeps its shape the rest
+ * of the time. Every button is one `task:bulk` call, which the main process answers
+ * as a single write: one notification, one entry on the undo stack, whatever the
+ * selection's size — the same row count a single-row delete would have cost.
+ *
+ * The selection is dropped by the store after each command, so the bar goes away on
+ * its own and the user is not left pointing at rows that have already been acted on.
+ */
+function BulkBar(): ReactElement {
+  const { t } = useTranslation('tasks');
+  const count = usePanelStore((state) => state.selectedIds.length);
+  const bulk = usePanelStore((state) => state.bulk);
+  const clearSelection = usePanelStore((state) => state.clearSelection);
+
+  return (
+    <div
+      data-field="bulk-bar"
+      data-count={count}
+      className="flex flex-wrap items-center gap-1.5 rounded-lg bg-[var(--bg-surface-muted)] px-2 py-1.5 text-sm"
+    >
+      <span className="mr-auto text-xs font-medium text-[var(--text-muted)]">
+        {t('bulk.selected', { count })}
+      </span>
+      <button
+        type="button"
+        data-field="bulk-complete"
+        onClick={() => void bulk({ kind: 'complete' })}
+        className="rounded-md px-2 py-1 text-xs font-medium hover:bg-[var(--bg-surface)]"
+      >
+        {t('bulk.complete')}
+      </button>
+      <button
+        type="button"
+        data-field="bulk-priority-high"
+        onClick={() => void bulk({ kind: 'priority', priority: BULK_PRIORITY })}
+        className="rounded-md px-2 py-1 text-xs font-medium hover:bg-[var(--bg-surface)]"
+      >
+        {t('bulk.priorityHigh')}
+      </button>
+      <button
+        type="button"
+        data-field="bulk-delete"
+        onClick={() => void bulk({ kind: 'delete' })}
+        className="rounded-md px-2 py-1 text-xs font-medium text-[var(--status-overdue)] hover:bg-[var(--bg-surface)]"
+      >
+        {t('bulk.delete')}
+      </button>
+      <button
+        type="button"
+        data-field="bulk-clear"
+        onClick={clearSelection}
+        className="rounded-md px-2 py-1 text-xs text-[var(--text-muted)] hover:bg-[var(--bg-surface)]"
+      >
+        {t('bulk.clear')}
+      </button>
+    </div>
   );
 }

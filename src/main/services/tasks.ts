@@ -1,4 +1,10 @@
-import type { TaskChangedPayload, TaskCreateInput, TaskQueryInput } from '@shared/contracts/task';
+import type {
+  TaskBulkInput,
+  TaskBulkOp,
+  TaskChangedPayload,
+  TaskCreateInput,
+  TaskQueryInput,
+} from '@shared/contracts/task';
 import type {
   ReorderScope,
   Task,
@@ -14,10 +20,12 @@ import {
   queryTasks,
   reorderTasks,
   restore,
+  restoreTask,
   softDelete,
   subtaskCounts,
   updateTask,
 } from '../db/repositories/tasks';
+import { popUndo, pushUndo, type UndoRow } from './undo';
 
 /**
  * The task domain, between the IPC handlers and the repositories
@@ -28,11 +36,19 @@ import {
  * Each write returns the stored rows *and* a change descriptor: the caller's IPC
  * handler is what turns that descriptor into the one notification per write
  * (`services/task-events.ts`).
+ *
+ * It is also where the undo stack is fed (M02 D7). The recording sits next to the
+ * write rather than in the handler because only the write knows what it changed,
+ * and because a bulk command has to leave *one* entry on the stack however many
+ * rows it touched.
  */
 
 export interface TaskWrite {
   change: TaskChangedPayload;
 }
+
+/** A bulk command: everything `task:bulk` can ask for except the delete. */
+type BulkCommand = Exclude<TaskBulkOp, { kind: 'delete' }>;
 
 /** A write that reports how many rows it touched, for the undo stack (M02 D7). */
 export interface TaskWriteResult extends TaskWrite {
@@ -64,45 +80,182 @@ export function readTask(id: string): TaskWithTags | null {
   return task === null ? null : withTags(task);
 }
 
-export function createTaskFromInput(input: TaskCreateInput, now: number = Date.now()): {
-  task: TaskWithTags;
-  change: TaskChangedPayload;
-} {
+export function createTaskFromInput(
+  input: TaskCreateInput,
+  now: number = Date.now(),
+): { task: TaskWithTags; change: TaskChangedPayload } {
   // The contract and `TaskDraft` carry the same fields, so the parsed input is
   // the draft: a second mapping step would only be a place to forget a field.
   const task = createTask(input, now);
+  // Undoing a create takes the row away again, so the entry records no `before`.
+  pushUndo({ rows: [{ id: task.id, before: null, tags: null }] });
   return { task: withTags(task), change: { kind: 'created', ids: [task.id] } };
 }
 
 /**
  * Applies a patch. `task` is `null` when the id is unknown — the handler reports
  * `NOT_FOUND` in that case and must not notify, since nothing changed.
- *
- * Ticking off a task that repeats also **creates its next occurrence** (M02 D10):
- * the completed one stays as the record of what was done, and the new one is the
- * same task moved forward. That is why the change descriptor can name two rows for
- * one user action — `ids` carries both, so the undo stack and the marker's recount
- * see the whole effect of the tick rather than half of it.
  */
 export function updateTaskFromPatch(
   id: string,
   patch: TaskPatch,
   now: number = Date.now(),
 ): { task: TaskWithTags | null; next: TaskWithTags | null; change: TaskChangedPayload } {
+  const applied = applyPatch(id, patch, now);
+  if (applied.task === null) return { task: null, next: null, change: { kind: 'updated', ids: [id] } };
+
+  pushUndo({ rows: applied.rows });
+  return {
+    task: applied.task,
+    next: applied.next,
+    change: { kind: 'updated', ids: applied.ids },
+  };
+}
+
+/** One command, many rows: one write, one notification, one undo entry (S7). */
+export function bulkTasks(input: TaskBulkInput, now: number = Date.now()): TaskWriteResult {
+  const { op } = input;
+  const ids = unique(input.ids);
+  // A bulk delete is a bulk delete however few rows it names, so it goes through
+  // the same path as a single one — including the cascade and the one entry.
+  if (op.kind === 'delete') return deleteTasks(ids, now);
+
+  const rows: UndoRow[] = [];
+  const changed: string[] = [];
+  let affected = 0;
+
+  for (const id of ids) {
+    const applied = applyPatch(id, patchFor(op), now);
+    if (applied.task === null) continue;
+    affected += 1;
+    rows.push(...applied.rows);
+    changed.push(...applied.ids);
+  }
+
+  // Nothing was written, so nothing is announced and nothing can be taken back.
+  if (affected === 0) return { affected: 0, change: { kind: 'updated', ids } };
+
+  // The whole selection is one entry: `Ctrl+Z` takes back the command, not the
+  // twentieth of it.
+  pushUndo({ rows });
+  // Ticking a repeating task mints its next occurrence, so a bulk tick can touch
+  // more rows than the selection named — the notification carries all of them.
+  return { affected, change: { kind: 'updated', ids: changed } };
+}
+
+/** Soft-deletes the ids, plus the subtasks that go down with them. */
+export function deleteTasks(ids: readonly string[], now: number = Date.now()): TaskWriteResult {
+  const { affected, tombstoned } = softDelete(ids, now);
+  if (affected > 0) pushUndo({ rows: undoRowsFor(tombstoned) });
+  return { affected, change: { kind: 'deleted', ids: unique(ids) } };
+}
+
+/** Takes the ids back out of the recycle bin. */
+export function restoreTasks(ids: readonly string[], now: number = Date.now()): TaskWriteResult {
+  const { affected, restored } = restore(ids, now);
+  // The rows come back as they were in the bin, tombstone included, so undoing a
+  // restore puts them back there (and takes their subtasks along).
+  if (affected > 0) pushUndo({ rows: undoRowsFor(restored) });
+  return { affected, change: { kind: 'restored', ids: unique(ids) } };
+}
+
+/** Writes the order the user dragged into place, inside one group (M02 D3). */
+export function reorderTaskGroup(
+  scope: ReorderScope,
+  ids: readonly string[],
+  now: number = Date.now(),
+): TaskWriteResult {
+  const { affected, moved } = reorderTasks(scope, ids, now);
+  if (affected > 0) {
+    // A reorder writes positions and nothing else, so the entry carries no tag
+    // set: restoring one from an empty list would drop tags the row still has.
+    pushUndo({
+      rows: moved.map((row) => ({ id: row.id, before: row, tags: null })),
+    });
+  }
+  return { affected, change: { kind: 'reordered', ids: unique(ids), scope } };
+}
+
+/**
+ * Takes the newest write back (M02 D7), and reports what it touched.
+ *
+ * Returns `null` when the stack is empty — the user pressed the shortcut one time
+ * too many, which is not an error — so the handler answers `ok(null)` and the
+ * panel does nothing.
+ *
+ * The entry is *not* pushed back afterwards: a run of `Ctrl+Z` would otherwise keep
+ * undoing its own undo, and the stack would never empty.
+ */
+export function undoLastWrite(now: number = Date.now()): TaskChangedPayload | null {
+  const entry = popUndo();
+  if (entry === null) return null;
+
+  const ids: string[] = [];
+  for (const row of entry.rows) {
+    if (row.before === null) softDelete([row.id], now);
+    else restoreTask(row.before, row.tags, now);
+    ids.push(row.id);
+  }
+  return { kind: 'undone', ids };
+}
+
+interface PatchApplication {
+  /** The stored row, or `null` when the id is unknown. */
+  task: TaskWithTags | null;
+  /** The occurrence a completion minted, if any. */
+  next: TaskWithTags | null;
+  /** What an undo has to put back; empty when nothing was written. */
+  rows: UndoRow[];
+  /** Every row this write touched: the patched one, plus any minted occurrence. */
+  ids: string[];
+}
+
+/**
+ * The core of a patch: writes it and reports what takes it back.
+ *
+ * Pushing the entry is left to the callers because a bulk command runs this once
+ * per row and must still leave one entry behind.
+ *
+ * Ticking off a task that repeats also **creates its next occurrence** (M02 D10):
+ * the completed one stays as the record of what was done, and the new one is the
+ * same task moved forward. That is why the ids can name two rows for one user
+ * action — the undo entry carries both, so `Ctrl+Z` takes back the whole tick
+ * rather than leaving an orphaned occurrence behind.
+ */
+function applyPatch(id: string, patch: TaskPatch, now: number): PatchApplication {
   const before = getTask(id);
+  if (before === null) return { task: null, next: null, rows: [], ids: [id] };
+  // Read before the write: a patch that sets tags must be undone back to the set
+  // the row had, not to the one it just acquired.
+  const tagsBefore = tagsOfTasks([id]).get(id) ?? [];
+
   const task = updateTask(id, patch, now);
-  if (task === null) return { task: null, next: null, change: { kind: 'updated', ids: [id] } };
+  if (task === null) return { task: null, next: null, rows: [], ids: [id] };
 
   // Only the transition matters, not the resulting status: unticking a task and
   // ticking it again is a new completion and does mint a new occurrence.
   const next =
-    task.status === 'done' && before?.status !== 'done' ? scheduleNextOccurrence(task, now) : null;
+    task.status === 'done' && before.status !== 'done' ? scheduleNextOccurrence(task, now) : null;
+
+  const rows: UndoRow[] = [{ id, before, tags: tagsBefore }];
+  if (next !== null) rows.push({ id: next.id, before: null, tags: null });
 
   return {
     task: withTags(task),
     next: next === null ? null : withTags(next),
-    change: { kind: 'updated', ids: next === null ? [id] : [id, next.id] },
+    rows,
+    ids: next === null ? [id] : [id, next.id],
   };
+}
+
+/** The patch one bulk command writes. `delete` is routed away before this runs. */
+function patchFor(op: BulkCommand): TaskPatch {
+  switch (op.kind) {
+    case 'complete':
+      return { status: 'done' };
+    case 'priority':
+      return { priority: op.priority };
+  }
 }
 
 /**
@@ -152,26 +305,11 @@ function scheduleNextOccurrence(task: Task, now: number): Task | null {
   );
 }
 
-/** Soft-deletes the ids, plus the subtasks that go down with them. */
-export function deleteTasks(ids: readonly string[], now: number = Date.now()): TaskWriteResult {
-  const affected = softDelete(ids, now);
-  return { affected, change: { kind: 'deleted', ids: unique(ids) } };
-}
-
-/** Takes the ids back out of the recycle bin. */
-export function restoreTasks(ids: readonly string[], now: number = Date.now()): TaskWriteResult {
-  const affected = restore(ids, now);
-  return { affected, change: { kind: 'restored', ids: unique(ids) } };
-}
-
-/** Writes the order the user dragged into place, inside one group (M02 D3). */
-export function reorderTaskGroup(
-  scope: ReorderScope,
-  ids: readonly string[],
-  now: number = Date.now(),
-): TaskWriteResult {
-  const affected = reorderTasks(scope, ids, now);
-  return { affected, change: { kind: 'reordered', ids: unique(ids), scope } };
+/** Undo entries for a write that read the rows it changed (a delete or a restore). */
+function undoRowsFor(rows: readonly Task[]): UndoRow[] {
+  if (rows.length === 0) return [];
+  const tags = tagsOfTasks(rows.map((row) => row.id));
+  return rows.map((row) => ({ id: row.id, before: row, tags: tags.get(row.id) ?? [] }));
 }
 
 function withTags(task: Task): TaskWithTags {

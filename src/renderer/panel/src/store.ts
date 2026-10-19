@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 
-import type { TaskPatchInput, TaskQueryInput } from '@shared/contracts/task';
+import type { TaskBulkOp, TaskPatchInput, TaskQueryInput } from '@shared/contracts/task';
 import type { BootParams, PanelState } from '@shared/types/app';
-import type { ReorderScope, TaskListItem, TaskWithTags } from '@shared/types/task';
+import type { Attachment, ReorderScope, TaskListItem, TaskWithTags } from '@shared/types/task';
 import { moveWithin } from '@shared/utils/sort-order';
 
 /**
@@ -51,6 +51,19 @@ interface PanelStore {
    */
   subtasks: TaskWithTags[];
 
+  /**
+   * The open task's attachments (M02 S7). References to files the user picked
+   * through the OS dialog: the rows say where a file is, and the file stays there.
+   */
+  attachments: Attachment[];
+
+  /**
+   * The rows the user multi-selected in the list (M02 S7). Ids rather than rows:
+   * the list is re-fetched wholesale after every write, so a row object held here
+   * would be a stale copy of a row that is drawn from somewhere else.
+   */
+  selectedIds: string[];
+
   /** True after a write came back rejected, so the detail can say so. */
   saveFailed: boolean;
 
@@ -83,6 +96,30 @@ interface PanelStore {
   /** Soft-deletes a subtask of the open task. */
   removeSubtask: (id: string) => Promise<void>;
 
+  /** Adds or removes one row from the multi-selection (M02 S7). */
+  toggleSelected: (id: string) => void;
+  /** Drops the selection without writing anything. */
+  clearSelection: () => void;
+  /**
+   * Applies one command to the whole selection in a single write. The selection is
+   * dropped afterwards, whatever the command was.
+   */
+  bulk: (op: TaskBulkOp) => Promise<boolean>;
+  /**
+   * Takes the newest write back (M02 D7). Resolves to `false` when the stack was
+   * empty — pressing the shortcut one time too many is not a failure.
+   */
+  undo: () => Promise<boolean>;
+
+  /** Re-reads the open task's attachments. */
+  refreshAttachments: () => Promise<void>;
+  /** Opens the OS file picker and stores whatever it returned. */
+  pickAttachments: () => Promise<void>;
+  /** Drops one attachment row; the file itself is left alone. */
+  removeAttachment: (id: string) => Promise<void>;
+  /** Opens one attachment with whatever handler the OS has for it. */
+  openAttachment: (id: string) => Promise<void>;
+
   setBoot: (boot: BootParams) => void;
   setPanelState: (state: PanelState) => void;
 }
@@ -102,6 +139,8 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
   openTaskId: null,
   openTask: null,
   subtasks: [],
+  attachments: [],
+  selectedIds: [],
   saveFailed: false,
 
   refreshTasks: async () => {
@@ -110,7 +149,15 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
       set({ tasksStatus: 'error' });
       return;
     }
-    set({ tasks: result.data, tasksStatus: 'ready' });
+    // The selection is cut down to rows that are still on screen: a tick or a
+    // delete can take a selected row out of the Inbox, and a selection nobody can
+    // see would be a bulk command waiting to hit rows the user cannot check.
+    const visible = new Set(result.data.map((task) => task.id));
+    set({
+      tasks: result.data,
+      tasksStatus: 'ready',
+      selectedIds: get().selectedIds.filter((id) => visible.has(id)),
+    });
   },
 
   addTask: async (title) => {
@@ -154,7 +201,13 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
   },
 
   openTaskDetail: async (id) => {
-    set({ openTaskId: id, openTask: null, subtasks: [], saveFailed: false });
+    set({
+      openTaskId: id,
+      openTask: null,
+      subtasks: [],
+      attachments: [],
+      saveFailed: false,
+    });
     const result = await window.api.task.get(id);
     if (!result.ok) {
       set({ saveFailed: true });
@@ -167,9 +220,17 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
     }
     set({ openTask: result.data });
     await get().refreshSubtasks();
+    await get().refreshAttachments();
   },
 
-  closeTaskDetail: () => set({ openTaskId: null, openTask: null, subtasks: [], saveFailed: false }),
+  closeTaskDetail: () =>
+    set({
+      openTaskId: null,
+      openTask: null,
+      subtasks: [],
+      attachments: [],
+      saveFailed: false,
+    }),
 
   refreshOpenTask: async () => {
     const id = get().openTaskId;
@@ -218,7 +279,13 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
       set({ saveFailed: true });
       return;
     }
-    set({ openTaskId: null, openTask: null, subtasks: [], saveFailed: false });
+    set({
+      openTaskId: null,
+      openTask: null,
+      subtasks: [],
+      attachments: [],
+      saveFailed: false,
+    });
   },
 
   addSubtask: async (title) => {
@@ -239,6 +306,89 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
 
   removeSubtask: async (id) => {
     const result = await window.api.task.delete([id]);
+    if (!result.ok) set({ saveFailed: true });
+  },
+
+  toggleSelected: (id) => {
+    const selected = get().selectedIds;
+    set({
+      selectedIds: selected.includes(id)
+        ? selected.filter((selectedId) => selectedId !== id)
+        : [...selected, id],
+    });
+  },
+
+  clearSelection: () => set({ selectedIds: [] }),
+
+  bulk: async (op) => {
+    const ids = get().selectedIds;
+    if (ids.length === 0) return false;
+
+    const result = await window.api.task.bulk(ids, op);
+    if (!result.ok) {
+      set({ tasksStatus: 'error' });
+      return false;
+    }
+    // The command is one write, so the panel answers it with one thing: the
+    // selection goes away. Half of it may have just left the view — a bulk tick
+    // takes rows out of the Inbox — and the re-fetch is what draws the result.
+    set({ selectedIds: [] });
+    return true;
+  },
+
+  undo: async () => {
+    const result = await window.api.task.undo();
+    if (!result.ok) {
+      set({ tasksStatus: 'error' });
+      return false;
+    }
+    // `null` is an empty stack. Nothing was written, so there is nothing to
+    // re-read and nothing to say: the shortcut simply did nothing (M02 D7).
+    if (result.data === null) return false;
+
+    // The selection is left alone on purpose: an undo reverses the last write,
+    // which is not usually the selection the user is holding right now.
+    return true;
+  },
+
+  refreshAttachments: async () => {
+    const id = get().openTaskId;
+    if (id === null) {
+      set({ attachments: [] });
+      return;
+    }
+    const result = await window.api.attachment.list(id);
+    if (!result.ok) return;
+    set({ attachments: result.data });
+  },
+
+  pickAttachments: async () => {
+    const id = get().openTaskId;
+    if (id === null) return;
+
+    const result = await window.api.attachment.add(id);
+    if (!result.ok) {
+      set({ saveFailed: true });
+      return;
+    }
+    // A cancelled picker answers with an empty list, and the re-read is what draws
+    // whatever was stored, so both cases take the same path.
+    await get().refreshAttachments();
+  },
+
+  removeAttachment: async (id) => {
+    const result = await window.api.attachment.remove(id);
+    if (!result.ok) {
+      set({ saveFailed: true });
+      return;
+    }
+    await get().refreshAttachments();
+  },
+
+  openAttachment: async (id) => {
+    const result = await window.api.attachment.open(id);
+    // A file that has been moved or deleted since it was attached is reported
+    // rather than opened: the row is still a true record of what was attached.
     if (!result.ok) set({ saveFailed: true });
   },
 

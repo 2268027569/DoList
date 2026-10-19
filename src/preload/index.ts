@@ -7,10 +7,17 @@ import type {
   MarkerStatePayload,
   PanelStatePayload,
 } from '@shared/contracts/channels';
-import type { TaskCreateInput, TaskChangedPayload, TaskPatchInput, TaskQueryInput } from '@shared/contracts/task';
+import type {
+  TaskBulkInput,
+  TaskCreateInput,
+  TaskChangedPayload,
+  TaskPatchInput,
+  TaskQueryInput,
+  TaskUndoResult,
+} from '@shared/contracts/task';
 import type { AppSettings } from '@shared/contracts/settings';
 import type { BootParams, MarkerAnchor } from '@shared/types/app';
-import type { ReorderScope, TaskListItem, TaskWithTags } from '@shared/types/task';
+import type { Attachment, ReorderScope, TaskListItem, TaskWithTags } from '@shared/types/task';
 import type { IpcResult } from '@shared/types/ipc';
 
 /**
@@ -59,6 +66,26 @@ const api = {
     restore: (ids: string[]) => invoke<{ affected: number }>(IPC.task.restore, { ids }),
     reorder: (scope: ReorderScope, ids: string[]) =>
       invoke<{ affected: number }>(IPC.task.reorder, { scope, ids }),
+    /** One command, many rows — one write, one notification, one undo entry (S7). */
+    bulk: (ids: string[], op: TaskBulkInput['op']) =>
+      invoke<{ affected: number }>(IPC.task.bulk, { ids, op }),
+    /**
+     * Take the newest write back. `null` means the stack was empty, which the panel
+     * shows nothing for: pressing the shortcut one time too many is not an error.
+     */
+    undo: () => invoke<TaskUndoResult | null>(IPC.task.undo),
+  },
+  attachment: {
+    /** The references hung on one task, in the order they were added. */
+    list: (taskId: string) => invoke<Attachment[]>(IPC.attachment.list, { taskId }),
+    /**
+     * Opens the OS file picker on the main side and stores what it returned. The
+     * renderer never sends a path: it asks for a pick, and gets rows back (S7).
+     */
+    add: (taskId: string) => invoke<Attachment[]>(IPC.attachment.add, { taskId }),
+    /** Removing the row never removes the file itself. */
+    remove: (id: string) => invoke<{ removed: boolean }>(IPC.attachment.remove, { id }),
+    open: (id: string) => invoke<null>(IPC.attachment.open, { id }),
   },
   i18n: {
     setLocale: (locale: string) => invoke<string>(IPC.i18n.setLocale, { locale }),

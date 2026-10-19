@@ -263,9 +263,15 @@ describe('softDelete', () => {
       const parent = createTask({ title: 'parent' }, NOW);
       const child = createTask({ title: 'child', parentId: parent.id }, NOW);
 
-      expect(softDelete([parent.id], NOW)).toBe(2);
+      const { affected, tombstoned } = softDelete([parent.id], NOW);
+      expect(affected).toBe(2);
       expect(getTask(child.id)?.deletedAt).toBe(NOW);
       expect(queryTasks()).toEqual([]);
+      // The rows come back as they were, tombstones absent: they are what an undo
+      // puts back, and a snapshot that already carried the stamp would restore the
+      // rows straight into the bin.
+      expect(tombstoned.map((task) => task.id).sort()).toEqual([parent.id, child.id].sort());
+      expect(tombstoned.every((task) => task.deletedAt === null)).toBe(true);
     });
   });
 
@@ -273,8 +279,12 @@ describe('softDelete', () => {
     withTempDatabase(() => {
       const task = createTask({ title: 'x' }, NOW);
 
-      expect(softDelete([task.id], NOW)).toBe(1);
-      expect(softDelete([task.id], NOW)).toBe(0);
+      expect(softDelete([task.id], NOW).affected).toBe(1);
+      // A row already in the bin is not re-stamped, so the second delete reports
+      // nothing — and notifies nobody.
+      const again = softDelete([task.id], NOW);
+      expect(again.affected).toBe(0);
+      expect(again.tombstoned).toEqual([]);
     });
   });
 });
@@ -286,9 +296,13 @@ describe('restore', () => {
       const child = createTask({ title: 'child', parentId: parent.id }, NOW);
       softDelete([parent.id], NOW);
 
-      expect(restore([parent.id], NOW + 1)).toBe(2);
+      const { affected, restored } = restore([parent.id], NOW + 1);
+      expect(affected).toBe(2);
       expect(getTask(child.id)?.deletedAt).toBeNull();
       expect(queryTasks()).toHaveLength(2);
+      // And the rows come back as they were *in the bin*, so undoing this restore
+      // puts the tombstones back where they were.
+      expect(restored.every((task) => task.deletedAt === NOW)).toBe(true);
     });
   });
 
@@ -299,7 +313,7 @@ describe('restore', () => {
       softDelete([child.id], NOW); // its own tombstone
       softDelete([parent.id], NOW + 1); // a later cascade leaves it alone
 
-      expect(restore([parent.id], NOW + 2)).toBe(1);
+      expect(restore([parent.id], NOW + 2).affected).toBe(1);
       expect(getTask(parent.id)?.deletedAt).toBeNull();
       expect(getTask(child.id)?.deletedAt).toBe(NOW);
     });
@@ -309,7 +323,9 @@ describe('restore', () => {
     withTempDatabase(() => {
       const task = createTask({ title: 'x' }, NOW);
 
-      expect(restore([task.id], NOW)).toBe(0);
+      const result = restore([task.id], NOW);
+      expect(result.affected).toBe(0);
+      expect(result.restored).toEqual([]);
     });
   });
 });
@@ -383,9 +399,15 @@ describe('reorderTasks', () => {
       const second = createTask({ title: 'b' }, NOW + 1);
       const foreign = createTask({ title: 'other', listId: 'l1' }, NOW + 2);
 
-      expect(
-        reorderTasks({ kind: 'top', listId: null }, [second.id, foreign.id, first.id], NOW + 9),
-      ).toBe(2);
+      const result = reorderTasks(
+        { kind: 'top', listId: null },
+        [second.id, foreign.id, first.id],
+        NOW + 9,
+      );
+      expect(result.affected).toBe(2);
+      // The foreign row is not in this group, so it leaves no snapshot: an undo must
+      // never try to put back a row this write never touched.
+      expect(result.moved.map((task) => task.id)).toEqual([second.id, first.id]);
       expect(queryTasks({ listId: null }).map((task) => task.id)).toEqual([
         second.id,
         first.id,
@@ -403,9 +425,11 @@ describe('reorderTasks', () => {
 
       // The panel's Inbox filter leaves the done row out of the list it shows, so
       // the reorder it sends names only the two open rows.
-      expect(
-        reorderTasks({ kind: 'top', listId: null }, [second.id, first.id], NOW + 5),
-      ).toBe(2);
+      const result = reorderTasks({ kind: 'top', listId: null }, [second.id, first.id], NOW + 5);
+      // Two rows were named, and the done row parked at the tail is a second moved
+      // row: an undo has to put it back where it was, not only the named ones.
+      expect(result.affected).toBe(2);
+      expect(result.moved.map((task) => task.id)).toEqual([second.id, done.id]);
 
       const group = queryTasks({ listId: null });
       expect(group.map((task) => task.id)).toEqual([second.id, first.id, done.id]);
@@ -424,7 +448,8 @@ describe('reorderTasks', () => {
       const second = createTask({ title: 'second', parentId: parent.id }, NOW);
 
       expect(
-        reorderTasks({ kind: 'subtask', parentId: parent.id }, [second.id, first.id], NOW),
+        reorderTasks({ kind: 'subtask', parentId: parent.id }, [second.id, first.id], NOW)
+          .affected,
       ).toBe(2);
       expect(queryTasks({ parentId: parent.id }).map((task) => task.id)).toEqual([
         second.id,

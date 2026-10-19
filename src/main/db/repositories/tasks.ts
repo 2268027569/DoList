@@ -215,13 +215,29 @@ export function updateTask(id: string, patch: TaskPatch, now: number): Task | nu
  *
  * A subtask has no life of its own — leaving it behind would mean an orphan the
  * panel cannot reach, since the list only renders tasks whose parent is visible.
- * Returns the number of rows actually touched.
+ *
+ * Returns the number of rows actually touched and the rows as they were before it:
+ * the undo stack has to put back everything one delete took, cascaded subtasks
+ * included (M02 D7), and this is the one place that knows what the cascade reached.
  */
-export function softDelete(ids: readonly string[], now: number): number {
+export function softDelete(
+  ids: readonly string[],
+  now: number,
+): { affected: number; tombstoned: Task[] } {
   const unique = [...new Set(ids)];
-  if (unique.length === 0) return 0;
+  if (unique.length === 0) return { affected: 0, tombstoned: [] };
 
   const db = getDatabase();
+  const placeholders = unique.map(() => '?').join(', ');
+  // Read before writing: these are the rows the cascade is about to take, and the
+  // state the undo stack needs to put them back.
+  const candidates = db
+    .prepare(
+      `SELECT ${COLUMNS} FROM tasks t
+        WHERE (t.id IN (${placeholders}) OR t.parent_id IN (${placeholders}))
+          AND t.deleted_at IS NULL`,
+    )
+    .all(...unique, ...unique) as TaskRow[];
   const deleteOne = db.prepare(
     'UPDATE tasks SET deleted_at = ?, updated_at = ? WHERE id = ? AND deleted_at IS NULL',
   );
@@ -236,7 +252,7 @@ export function softDelete(ids: readonly string[], now: number): number {
       // Subtasks are one level deep, so a single extra pass reaches all of them.
       affected += deleteChildren.run(now, now, id).changes;
     }
-    return affected;
+    return { affected, tombstoned: candidates.map(mapTask) };
   });
   return run();
 }
@@ -247,13 +263,22 @@ export function softDelete(ids: readonly string[], now: number): number {
  * Subtasks come back only when they carry the *same* tombstone timestamp as the
  * parent they went down with: one that was deleted on its own earlier keeps its
  * own stamp and stays in the bin, which is what the user asked for at the time.
+ *
+ * Returns the rows as they were before the restore — the binned state, cascade
+ * included — so an undo can put the tombstones back (M02 D7).
  */
-export function restore(ids: readonly string[], now: number): number {
+export function restore(
+  ids: readonly string[],
+  now: number,
+): { affected: number; restored: Task[] } {
   const unique = [...new Set(ids)];
-  if (unique.length === 0) return 0;
+  if (unique.length === 0) return { affected: 0, restored: [] };
 
   const db = getDatabase();
-  const readStamp = db.prepare('SELECT deleted_at FROM tasks WHERE id = ?');
+  const readRow = db.prepare(`SELECT ${COLUMNS} FROM tasks t WHERE t.id = ?`);
+  const readChildren = db.prepare(
+    `SELECT ${COLUMNS} FROM tasks t WHERE t.parent_id = ? AND t.deleted_at = ?`,
+  );
   const restoreOne = db.prepare(
     'UPDATE tasks SET deleted_at = NULL, updated_at = ? WHERE id = ? AND deleted_at = ?',
   );
@@ -263,17 +288,74 @@ export function restore(ids: readonly string[], now: number): number {
 
   const run = db.transaction(() => {
     let affected = 0;
+    const restored: Task[] = [];
     for (const id of unique) {
-      const row = readStamp.get(id) as { deleted_at: number | null } | undefined;
+      const row = readRow.get(id) as TaskRow | undefined;
       const stamp = row?.deleted_at ?? null;
-      if (stamp === null) continue; // live already, or an unknown id
+      if (row === undefined || stamp === null) continue; // live already, or unknown
 
+      const children = readChildren.all(id, stamp) as TaskRow[];
       affected += restoreOne.run(now, id, stamp).changes;
       affected += restoreChildren.run(now, id, stamp).changes;
+      restored.push(mapTask(row), ...children.map(mapTask));
     }
-    return affected;
+    return { affected, restored };
   });
   return run();
+}
+
+/**
+ * Puts a row back into the state a snapshot recorded (M02 D7: undo).
+ *
+ * Every data column is written from the snapshot rather than derived from the
+ * current status, which is what makes one function able to take back a completion,
+ * a title rewrite, a move, a deletion and a restore: the row simply goes back to
+ * what it was. `completed_at` and `deleted_at` are part of that state, so an undone
+ * tick clears the stamp and an undone restore puts the tombstone back.
+ *
+ * `updated_at` is *not* the snapshot's: undoing is a write happening now, and M08
+ * resolves sync conflicts by that timestamp.
+ *
+ * `tags` is the tag set to restore, or `null` when the write never touched tags (a
+ * reorder) — writing an empty list there would wipe the tags the row still has.
+ */
+export function restoreTask(
+  snapshot: Task,
+  tags: readonly string[] | null,
+  now: number,
+): void {
+  const db = getDatabase();
+  const run = db.transaction(() => {
+    db.prepare(
+      `UPDATE tasks
+          SET list_id = ?, parent_id = ?, title = ?, notes = ?, status = ?, priority = ?,
+              due_at = ?, due_has_time = ?, repeat_rule = ?, repeat_mode = ?,
+              estimate_min = ?, actual_min = ?, remind_lead_min = ?, sort_order = ?,
+              completed_at = ?, deleted_at = ?, updated_at = ?
+        WHERE id = ?`,
+    ).run(
+      snapshot.listId,
+      snapshot.parentId,
+      snapshot.title,
+      snapshot.notes,
+      snapshot.status,
+      snapshot.priority,
+      snapshot.dueAt,
+      snapshot.dueHasTime ? 1 : 0,
+      snapshot.repeatRule,
+      snapshot.repeatMode,
+      snapshot.estimateMin,
+      snapshot.actualMin,
+      snapshot.remindLeadMin,
+      snapshot.sortOrder,
+      snapshot.completedAt,
+      snapshot.deletedAt,
+      now,
+      snapshot.id,
+    );
+    if (tags !== null) setTaskTags(snapshot.id, tags, now);
+  });
+  run();
 }
 
 /**
@@ -337,22 +419,24 @@ export function queryTasks(filter: TaskFilter = {}): Task[] {
  * sequence, and a later view that shows both would draw two rows with the same
  * `sort_order` in whatever order the table happened to be in.
  *
- * Returns how many rows actually moved. A row already sitting where it is asked to
- * sit keeps its `updated_at`, so a partial reorder does not mark rows the user
- * never touched as modified — M08 resolves sync conflicts by that timestamp.
+ * Returns how many rows actually moved, plus the state each of them was in before —
+ * the undo stack needs exactly that, and this is the one place that already knows
+ * which rows moved (M02 D7). A row already sitting where it is asked to sit keeps its
+ * `updated_at`, so a partial reorder does not mark rows the user never touched as
+ * modified — M08 resolves sync conflicts by that timestamp.
  */
 export function reorderTasks(
   scope: ReorderScope,
   ids: readonly string[],
   now: number,
-): number {
-  if (ids.length === 0) return 0;
+): { affected: number; moved: Task[] } {
+  if (ids.length === 0) return { affected: 0, moved: [] };
 
   const db = getDatabase();
   const { where, params: scopeParams } = scopeSql(scope);
   const group = db
-    .prepare(`SELECT id, sort_order FROM tasks WHERE ${where} ORDER BY sort_order, rowid`)
-    .all(...scopeParams) as { id: string; sort_order: number }[];
+    .prepare(`SELECT ${COLUMNS} FROM tasks t WHERE ${where} ORDER BY t.sort_order, rowid`)
+    .all(...scopeParams) as TaskRow[];
 
   const named = new Set(ids);
   const sequence = [
@@ -360,22 +444,26 @@ export function reorderTasks(
     ...group.filter((row) => !named.has(row.id)).map((row) => row.id),
   ];
   const positionOf = new Map(group.map((row) => [row.id, row.sort_order]));
+  const rowOf = new Map(group.map((row) => [row.id, mapTask(row)]));
 
   const update = db.prepare(
     `UPDATE tasks SET sort_order = ?, updated_at = ? WHERE id = ? AND ${where}`,
   );
 
   const run = db.transaction(() => {
-    let affected = 0;
+    const moved: Task[] = [];
     sequence.forEach((id, index) => {
       // `positionOf` has no entry for an id from another group: the update below
       // matches nothing, and the count of moved rows stays honest.
       if (positionOf.get(id) === index) return;
-      affected += update.run(index, now, id, ...scopeParams).changes;
+      if (update.run(index, now, id, ...scopeParams).changes === 0) return;
+      const before = rowOf.get(id);
+      if (before !== undefined) moved.push(before);
     });
-    return affected;
+    return moved;
   });
-  return run();
+  const moved = run();
+  return { affected: moved.length, moved };
 }
 
 /**

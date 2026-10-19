@@ -23,6 +23,7 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
   const refreshTasks = usePanelStore((state) => state.refreshTasks);
   const refreshOpenTask = usePanelStore((state) => state.refreshOpenTask);
   const closeTaskDetail = usePanelStore((state) => state.closeTaskDetail);
+  const undo = usePanelStore((state) => state.undo);
   const tasks = usePanelStore((state) => state.tasks);
   const openTask = usePanelStore((state) => state.openTask);
   const [open, setOpen] = useState(false);
@@ -65,6 +66,30 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
       void changeLocale(locale);
     });
   }, []);
+
+  /*
+   * `Ctrl+Z` takes the newest write back (M02 D7). It is handled here rather than on
+   * a field because it has to work whichever control has the caret — including a
+   * text field, where the browser's own undo only ever reaches that field — and it
+   * has to work while the panel is showing the list or the detail.
+   *
+   * Two fields keep their own undo: the quick-add and the detail's text inputs are
+   * where the *user's typing* lives, and a keystroke-level undo there is what the
+   * caret expects. Everywhere else — the body of the panel, a chip, a button — the
+   * chord means "take back the last change to the data".
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== 'z' && event.key !== 'Z') return;
+      if (!(event.ctrlKey || event.metaKey) || event.shiftKey) return;
+      // `Ctrl+Z` inside a text field or a textarea is the field's own business.
+      if (isTextField(event.target)) return;
+      event.preventDefault();
+      void undo();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [undo]);
 
   // Collapse is finished when the exit animation ended, not when the timer says
   // so: the main process waits for this acknowledgement (docs/ARCHITECTURE.md §7).
@@ -112,5 +137,17 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
         <span className="panel-resize" aria-hidden="true" onPointerDown={resize.onPointerDown} />
       </section>
     </div>
+  );
+}
+
+/** True when the event came from a control that keeps its own `Ctrl+Z`. */
+function isTextField(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  // `isContentEditable` is checked as well because a future notes field may be one;
+  // today every editor in the panel is an input or a textarea.
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target.isContentEditable
   );
 }

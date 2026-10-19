@@ -104,6 +104,22 @@ export interface TaskPatch {
   tags?: readonly string[];
 }
 
+/**
+ * One row of `attachments` (M02 S7). Only a *reference* to the file is stored — the
+ * file itself stays where the user put it, which is what "local first" means here:
+ * copying it into the app's directory would duplicate gigabyte-scale files and make
+ * folder sync (M10) carry them.
+ */
+export interface Attachment {
+  id: string;
+  taskId: string;
+  path: string;
+  /** Display name, usually the file's basename; `null` lets the panel derive one. */
+  name: string | null;
+  size: number | null;
+  createdAt: number;
+}
+
 /** Row order `queryTasks` returns. `manual` is the stored `sort_order`. */
 export const TASK_SORTS = ['manual', 'due', 'priority', 'created', 'title'] as const;
 export type TaskSort = (typeof TASK_SORTS)[number];

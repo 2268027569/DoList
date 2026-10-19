@@ -20,7 +20,9 @@
  *  10. a fresh launch reads those same values and that same order back off the disk,
  *      and
  *  11. ticking the repeating task off mints its next occurrence, which the list then
- *      draws in the place the completed row had occupied (slice S6).
+ *      draws in the place the completed row had occupied (slice S6),
+ *  12. two rows are multi-selected and one bulk command sets them both (slice S7), and
+ *  13. a single `Ctrl+Z` takes that whole command back (slice S7).
  *
  * Only two things come from the OS: the global shortcut, which a registered hotkey
  * only ever sees when the input queue produced it, and the app's own launch. Every
@@ -256,10 +258,15 @@ const KEYS = {
   Escape: { code: 'Escape', virtualKey: 27 },
   ArrowUp: { code: 'ArrowUp', virtualKey: 38 },
   ArrowDown: { code: 'ArrowDown', virtualKey: 40 },
+  z: { code: 'KeyZ', virtualKey: 90 },
 };
 
-/** The protocol's modifier bit mask; only Alt is needed, by the reorder shortcut. */
+/**
+ * The protocol's modifier bit mask. Alt drives the reorder shortcut; Ctrl drives the
+ * undo chord, which is read from `event.ctrlKey` by the panel's own key listener.
+ */
 const ALT = 1;
+const CTRL = 2;
 
 /** A key press delivered by the renderer itself, so no OS queue is involved. */
 async function pressKey(cdp, key, modifiers = 0) {
@@ -333,6 +340,15 @@ function readTasks(scope = 'topLevel') {
   } finally {
     db.close();
   }
+}
+
+/**
+ * The rows the Inbox actually draws: the same `todo`/`doing` filter the panel queries
+ * with, applied by hand. `readTasks()` reads every top-level row, and a ticked task
+ * that is still in the table is not one the list has a control for (M02 S7).
+ */
+function inboxRows() {
+  return readTasks().filter((row) => row.status === 'todo' || row.status === 'doing');
 }
 
 /** Local midnight `offsetDays` from today, worked out the way the panel's presets do. */
@@ -1110,6 +1126,92 @@ async function main() {
     } else {
       fail(
         `the row in the completed task's place reports a tally of ${JSON.stringify(afterTickRender?.detail?.rows?.[1]?.progress ?? null)}`,
+      );
+    }
+
+    // --- phase 7: a multi-selection takes one bulk command (slice S7) ---------
+    // The rows to act on are read off the database rather than remembered from
+    // earlier: the completed instance left the Inbox and the new occurrence took its
+    // place, so the ids this run holds from phase 2 are no longer both on screen.
+    const selectedRows = inboxRows();
+    // Read before the command, because the undo has to put these exact values back —
+    // not a default. The ticked task repeats, so its new occurrence inherited the
+    // priority the completed one carried rather than starting from nothing.
+    const prioritiesBefore = selectedRows.map((row) => row.priority);
+    for (const row of selectedRows) {
+      await gotoField(cdp, 'row-select', row.id);
+      await pressKey(cdp, 'Enter');
+    }
+
+    const barCount = await evaluate(
+      cdp,
+      `(() => {
+         const bar = document.querySelector('[data-field="bulk-bar"]');
+         return bar === null ? null : bar.dataset.count;
+       })()`,
+    );
+    if (barCount === '2') {
+      pass('selecting two rows raised the bulk bar over the list', { count: barCount });
+    } else {
+      fail(`the bulk bar reports ${JSON.stringify(barCount)}, expected "2"`);
+    }
+
+    // "High priority" is the command with an observable result on the rows and no
+    // interaction with the Inbox filter — a tick would take the rows out of the view
+    // before the undo could be read off them.
+    await gotoField(cdp, 'bulk-priority-high');
+    const raised = await pressKeyAndWait(cdp, 'Enter');
+    if (raised?.detail?.kind === 'updated' && (raised.detail.ids?.length ?? 0) === 2) {
+      pass('the bulk command was announced as one update naming both rows', raised.detail);
+    } else {
+      fail(`the bulk command announced ${JSON.stringify(raised?.detail ?? null)}, expected one update with two ids`);
+    }
+
+    const raisedRows = inboxRows();
+    if (raisedRows.length === 2 && raisedRows.every((row) => row.priority === 3)) {
+      pass('both selected rows carry the priority the one command set', {
+        priorities: raisedRows.map((row) => row.priority),
+      });
+    } else {
+      fail(
+        `after the bulk command the Inbox reads ${JSON.stringify(raisedRows.map((row) => row.priority))}, expected two 3s`,
+      );
+    }
+    // One write, one selection, and the bar has nothing left to point at.
+    const barGone = await evaluate(
+      cdp,
+      `document.querySelector('[data-field="bulk-bar"]') === null`,
+    );
+    if (barGone === true) {
+      pass('the bulk bar went away with the selection it acted on');
+    } else {
+      fail('the bulk bar is still drawn after the command it ran on a selection');
+    }
+
+    // --- phase 8: one Ctrl+Z takes the whole bulk command back (slice S7) -----
+    // The selection was one write, so it is one entry on the undo stack and one chord
+    // has to take all of it back — not just the row the caret happens to be on.
+    await gotoField(cdp, 'task-title', selectedRows[0].id);
+    const undone = await pressKeyWithModifier(cdp, 'z', CTRL);
+    if (undone?.detail?.kind === 'undone' && (undone.detail.ids?.length ?? 0) === 2) {
+      pass('Ctrl+Z was announced as one undo naming both rows', undone.detail);
+    } else {
+      fail(`Ctrl+Z announced ${JSON.stringify(undone?.detail ?? null)}, expected one undo with two ids`);
+    }
+
+    const restoredRows = inboxRows();
+    if (
+      restoredRows.length === 2 &&
+      JSON.stringify(restoredRows.map((row) => row.priority)) === JSON.stringify(prioritiesBefore) &&
+      prioritiesBefore.some((priority) => priority !== 3)
+    ) {
+      pass('the whole bulk command was taken back by a single chord', {
+        before: prioritiesBefore,
+        after: restoredRows.map((row) => row.priority),
+      });
+    } else {
+      fail(
+        `after Ctrl+Z the Inbox reads ${JSON.stringify(restoredRows.map((row) => row.priority))}, expected the ${JSON.stringify(prioritiesBefore)} they had before the command`,
       );
     }
   } finally {

@@ -7,7 +7,7 @@
 > verified.
 
 - **状态**：已确认（2026-10-19）——D2 用 `rrule` 库、D6 全屏替换式、S7/S8 本轮一并做完
-- **进度**：S0 ✅ 测试地基 → S1 ✅ 数据层 → S2 ✅ IPC → S3 ✅ 列表与快速新增 → S4 ✅ 详情与字段编辑 → S5 ✅ 排序与拖拽 → **S6 ✅ 子任务与重复（2026-10-19）** → 下一片 S7 撤销 / 批量 / 附件
+- **进度**：S0 ✅ 测试地基 → S1 ✅ 数据层 → S2 ✅ IPC → S3 ✅ 列表与快速新增 → S4 ✅ 详情与字段编辑 → S5 ✅ 排序与拖拽 → S6 ✅ 子任务与重复 → **S7 ✅ 撤销 / 批量 / 附件（2026-10-19）** → 下一片 S8（可选，M01 收尾：右键菜单）
   - S1 落地：迁移 `0002_task_fields.sql`（加 `remind_lead_min`）、`shared/types/task.ts`、`shared/utils/id.ts`（UUID v7）、`shared/utils/task-query.ts`（过滤 → SQL + 排序白名单）、`repositories/tasks.ts`（增删改查 / 软删级联 / 恢复 / 重排）、`repositories/tags.ts`、`repositories/attachments.ts`；不变量见 ARCHITECTURE §5.1，真库用例 30 例
   - S2 落地：`shared/contracts/task.ts`（zod 契约）、`channels.ts` 的 6 条任务通道 + `event:task-changed`、`main/services/tasks.ts`（域服务，不 import electron）、`main/services/task-events.ts`（`notifyTasksChanged` 单一通知点）、`main/ipc/handlers/task.ts`（按列表注册）、`ipc/validate.ts`（共用 `invalid()`）、preload 白名单 `api.task.*` / `api.on.taskChanged`；契约 20 例 + 服务层真库 15 例
   - S3 落地：`shared/utils/task-due-label.ts`（截止 chip 纯逻辑，9 例单测）、`shared/i18n/format.ts` 补 `formatDayOffset`、`event:quick-add-focus` 通道 + preload 订阅 + 主进程 `expandPanelForQuickAdd()`、全局快捷键 `Ctrl+Shift+N`、面板 `store.ts` 任务分片 + `quick-add.tsx` / `task-row.tsx` / `task-list.tsx`（App.tsx 由 M0 演示壳改为收件箱）、中英双语 `tasks.json` 新键、`scripts/smoke-tasks.mjs`（12 项断言）
@@ -24,6 +24,9 @@
   - S6 落地：`shared/utils/recurrence.ts`（`rrule` 之上的一层薄封装：`nextOccurrence` 两种模式、`isValidRule` 写入口校验；10 组 12 例单测，覆盖每天 / 工作日 / 每周 / 每月 31 号 / 2·29 跳四年 / DST 钟点 / 迟到只跳不补 / `COUNT`·`UNTIL` 用尽 / 非法规则不抛）、`shared/utils/task-tree.ts`（`n/m` 汇总与"全做完"，4 例单测）、`repositories/tasks.ts` 的 `subtaskCounts`（一次 `GROUP BY parent_id` 取一串父行的汇总）、`services/tasks.ts` 的 `listTasks` 同时带上 tags 与 subtasks（每行都要画，分成两次读等于每次输入都多付一次往返）、`updateTaskFromPatch` 换成返回 `{ task, next, change }` 并在勾选完成时建下一次、`contracts/task.ts` 把 `repeatRule` 收到 `min(1).max(1000).refine(isValidRule)`、`preload` 的查询返回类型改 `TaskListItem`、面板 `store.ts` 加子任务分片（`refreshSubtasks` / `addSubtask` / `removeSubtask`）、`repeat-presets.ts`（纯数据，面板不 import `rrule`）、`task-detail.tsx` 加「重复」与「子任务」两区、`task-row.tsx` 加 `n/m` chip、中英 `tasks.json` 13 个新键、`smoke-tasks.mjs` 加两张清单（phase 4d 与 phase 6）
   - S6 的三处判断：① 规则解析必须**先设 `dtstart` 再构造 `RRule`**——构造器是从它拿到的 start 推导钟点（`timeset` / `byhour` / `byminute`），先构造再把 `dtstart` 替换回去，规则会一直按默认 start 的钟点触发；② `rrule` 不坚持 `FREQ`，`COUNT=5` 单独一个会静默变成年度规则，因此 `build()` 先守着 `FREQ=` 再解析；③ 子任务输入框放在清单**下方**——放上面的话，加一条就会把光标所在的那个框往下推，连续录入时面板会在用户手底下滚动
   - S6 的两处收窄：**没有新迁移**——`repeat_rule` / `repeat_mode` 在 0001 建表时就有（M02 只需 `remind_lead_min` 一个新列，S1 已加）；**重复只支持"完成即生成下一次"**，不做"提前 N 天展开多条未来实例"——那需要 `reminders` 那样的独立实例表，属于 M04 提醒模块的活；子任务进度汇总按行带出（`subtasks: { total, done }`），不做无限层级
+  - S7 落地：`main/services/undo.ts`（内存逆操作栈：条目是"要放回的行"的快照列表而非逆操作、上限 30、`popUndo` 消费不压回、重启即失效）、`services/tasks.ts` 的 `bulkTasks` / `undoLastWrite` 与单写入路径统一 `pushUndo`、仓储层 `softDelete` / `restore` / `reorderTasks` 改为返回 `{ affected, tombstoned|restored|moved }`（快照语义：删除快照 `deleted_at === null`、恢复快照带 tombstone 时间戳、`moved` 只含真正移动的行）、`repositories/tasks.ts` 新增 `restoreTask`（按快照整行回写）、`services/attachments.ts`（只存路径引用：`name` / `size` 由主进程现读 `statSync`）、`contracts/task.ts` 的 `taskBulkInput`（判别联合）+ 附件四通道、`channels.ts` 加 `task:bulk` / `task:undo` / `IPC.attachment`、`ipc/handlers/attachment.ts`（`dialog` 选择器与 `shell.openPath` 只在 IPC 层）、preload `task.bulk` / `task.undo` / `attachment.*`、面板 `store.ts` 的选中集 / `bulk` / `undo` / 附件分片、`task-row.tsx` 选择框、`task-list.tsx` 批量条、`task-detail.tsx` 附件区、App 层 `Ctrl+Z`、中英 `tasks.json` 新键、`smoke-tasks.mjs` phase 7/8
+  - S7 的三处判断：① 撤销栈存的是**要放回的行**（快照）而不是逆操作——一次批量命令、一次勾选生成下一次，都是"多个行一起变"，逆操作要么写成一堆分支、要么会漏掉新生成的行，快照列表让"撤销创建 = 软删该行、撤销其它 = 按快照回写"各归一条路径；`undoLastWrite` 消费式弹出而不压回，否则连按 `Ctrl+Z` 会撤销自己的撤销、栈永不空。② 批量契约**只留三条命令**（`complete` / `priority` / `delete`），刻意不做文本类字段（改日期 / 加标签 / 移清单）——一条会覆盖整批同一值的文本命令既难以撤销回各自的原值，也不符合"一个操作条只有几个按钮"的形态；`delete` 与单行走**同一软删级联**路径，不另开一条。③ 附件**只存引用**（路径），不复制文件：`name` / `size` 由主进程 `statSync` 现读（文件被删/改名时列仍在、`size` 为 `null`），OS 文件选择器与 `shell.openPath` 只住在 IPC handler 里——服务层因此不 import electron、可单测，渲染层永远不发路径、只能点按钮让主进程弹选择器
+  - S7 的两处收窄：**批量只做三条命令**（见上）；**附件区只在详情里**（不做附件列表视图、不做拖拽入框）——够 P1 的"引用一个本地文件"，更重的附件管理留给后续里程碑
 - **范围**：[FEATURES.md](FEATURES.md) 的 M02（**不含**自然语言解析，属 P1 且依赖 M06 的语种词表）
 - **前置**：M01 已完成（标记窗口、拖拽、吸附、贴边隐藏、面板形态、状态推送）
 - **约定**：中文文档；英文提交信息与代码注释；每个切片独立提交、独立验证
@@ -41,7 +44,7 @@ M02 是「看得见的功能」的第一个模块：**数据模型 + 读写通�
 | 扩展字段：预估 / 实际耗时、创建与完成时间 | 提醒实例与系统通知（M04） |
 | 子任务（一层）+ 完成进度汇总 | 日历 / 看板（P2） |
 | 重复任务（RRULE 预设 + 自定义，两种模式） | 富文本粘贴拆任务、粘贴 URL 抓标题（P2，需联网） |
-| 快速新增、详情面板、拖拽排序（组内 + 跨清单） | 附件（P1，见 S7，可裁） |
+| 快速新增、详情面板、拖拽排序（组内 **S5**；跨清单等 M03） | 附件管理界面（**S7 只做详情里的引用式附件**：存路径、不算复制文件） |
 | 撤销（Ctrl+Z） | 回收站的独立界面（M03 的归档视图承载） |
 
 ---
@@ -101,9 +104,9 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 
 | 文件 | 内容 |
 |---|---|
-| `tasks.ts` | 扩展：`createTask` / `updateTask(patch)` / `softDelete(ids, cascade)` / `restore(ids)` / `queryTasks(filter)` / `reorderTasks(scope, ids)` / `taskTree(parentId)`；保留既有 `markerCounts` |
+| `tasks.ts` | 扩展：`createTask` / `updateTask(patch)` / `softDelete(ids, cascade)` / `restore(ids)` / `queryTasks(filter)` / `reorderTasks(scope, ids)` / `taskTree(parentId)`；**S7 加** `restoreTask(snapshot, tags)`，且 `softDelete` / `restore` / `reorderTasks` 改为返回 `{ affected, tombstoned｜restored｜moved }`（快照供撤销用）；保留既有 `markerCounts` |
 | `tags.ts` | `findOrCreateTag(name)` / `attachTags` / `detachTags` / `tagsOfTasks(ids)`（`name` 已是 UNIQUE，用 upsert） |
-| `attachments.ts` | `addAttachment` / `removeAttachment` / `attachmentsOfTask`（只存路径引用，不复制文件） |
+| `attachments.ts` | `addAttachment` / `removeAttachment` / `attachmentsOfTask` / **S7 加** `getAttachment`（只存路径引用，不复制文件） |
 | `lists.ts` | 仅 `defaultListId` 之类的最小读取，供 M03 接管前使用（M03 才做清单 CRUD） |
 
 **不变量（写进仓储层，不只写在文档里）**
@@ -127,9 +130,9 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 | `task:update` | `{ id, patch }`，patch 为字段子集 | 即时保存走它 |
 | `task:delete` / `task:restore` | `{ ids[] }` | 软删 = 进回收站 |
 | `task:reorder` | `{ scope, ids[] }`（scope = 某父任务下 / 某清单 / 收件箱） | 目标顺序，D3 的重排 |
-| `task:bulk` | `{ ids[], op }`（完成 / 改优先级 / 改日期 / 加标签 / 移清单 / 删除） | P1 |
-| `task:undo` | — | 撤销栈弹栈（D7） |
-| `attachment:add` / `:remove` / `:open` | `{ taskId }` / `{ id }` | 主进程用 `dialog` 与 `shell.openPath`，渲染层不碰 `fs` |
+| `task:bulk` | `{ ids[], op }`（**S7 落地为判别联合，仅 `complete` / `priority` / `delete` 三条**） | 一次命令一次写入、一次通知、一条撤销条目；文本类字段刻意不做（见 S7 判断②） |
+| `task:undo` | — | 撤销栈弹栈（D7）：空栈回 `ok(null)`，否则通知并回 `{ ids[] }` |
+| `attachment:list` / `:add` / `:remove` / `:open` | `{ taskId }` / `{ taskId }`（add 不带路径） / `{ id }` / `{ id }` | 主进程用 `dialog` 与 `shell.openPath`，渲染层不碰 `fs`；`add` 选择器取消即回空数组 |
 | `event:task-changed` | `{ kind, ids[], scope? }` | 单向广播，渲染层据此重取（D4） |
 | `event:quick-add-focus` | — | 全局快捷键展开面板后聚焦输入框（S3 落地时定名，只发给面板窗口） |
 
@@ -145,10 +148,10 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 |---|---|---|
 | 快速新增 | 单行输入，`Enter` 建任务并保持焦点继续输入；由 `Ctrl+Shift+N` 从任意位置唤起（快捷键文案已在 `tasks.json` 的 `inbox.empty` 里预告） | FEATURES M02 P0 |
 | 列表 | 复选圆钮（完成）/ 标题 / 截止 chip / 优先级标 / 标签 chip；子任务缩进一层，父行显示 `n/m`（**S6 已交付 `n/m` chip**）；空状态用已有 `inbox.empty` | — |
-| 详情 | 全屏替换式（D6）：标题、备注、截止（含「仅日期 / 含时刻」开关 + 今天 / 明天 / 清除）、提前提醒分钟、优先级、状态、标签增删、软删按钮；`Esc` 返回。**S4 已交付这些**；**S6 已交付**「重复」（5 个预设 + 自定义 RRULE 输入 + `fixed` / `after_completion` 两种模式）与「子任务」两区（清单 + `n/m` + 增删）；所属清单等 M03 有清单可用时补，预估/实际耗时与附件区等 S7 | — |
+| 详情 | 全屏替换式（D6）：标题、备注、截止（含「仅日期 / 含时刻」开关 + 今天 / 明天 / 清除）、提前提醒分钟、优先级、状态、标签增删、软删按钮；`Esc` 返回。**S4 已交付这些**；**S6 已交付**「重复」（5 个预设 + 自定义 RRULE 输入 + `fixed` / `after_completion` 两种模式）与「子任务」两区（清单 + `n/m` + 增删）；**S7 已交付**「附件」区（添加 / 打开 / 移除，只存路径引用）；所属清单等 M03 有清单可用时补，预估/实际耗时留到后续里程碑 | — |
 | 排序 | 列表内拖拽（**S5 已交付**，用 M01 验证过的 pointer 方案而非 HTML5 `draggable`）+ 键盘替代 `Alt+↑/↓`（无鼠标可用，也让自动化可测）；跨清单拖拽等 M03 有清单视图后补 | FEATURES M02 P0 |
-| 批量 | 选择模式 + 底部操作条（改优先级 / 改日期 / 加标签 / 移清单 / 完成 / 删除） | P1 |
-| 撤销 | 回收站条样式 toast + `Ctrl+Z` | P1 |
+| 批量 | **S7 已交付**：行首选择框（悬停/聚焦才显形）→ 列表上方浮出操作条（完成 / 提升到高优先级 / 删除 / 取消选择），命令成功即清空选择、操作条随之消失；操作条只做三条命令（见 S7 判断②） | P1 |
+| 撤销 | **S7 已交付**`Ctrl+Z`（列表与详情都生效，文本输入框内保留浏览器自身的撤销；空栈无动作）；**未做**回收站条样式 toast——没有"删除后可撤销"的提示条，撤销靠快捷键与文档 | P1 |
 | 状态 | 新增 `store.ts` 的任务分片：查询结果 + 选中集 + 详情目标；**不缓存派生数据**，重取即刷新 | D4 |
 
 样式一律走既有三层令牌（`--bg-*` / `--text-*` / `--accent` / `--status-*`），`check-tokens.mjs` 已在 CI 拦硬编码色值。
@@ -164,7 +167,8 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 | `shared/utils/recurrence.ts` | **S6 已实现**：`nextOccurrence`（`fixed` 锚在原到期、上界取 `max(due, now)` 所以迟到的只跳不补；`after_completion` 重锚在完成日但保留任务自己的钟点；日期型的落到本地零点）、`isValidRule`（写入口校验，非法规则一律拒绝）、`build`（先设 `dtstart` 再构造 `RRule`，并守着 `FREQ=`）。12 例单测 |
 | `shared/utils/task-tree.ts` | **S6 已实现**：`progressText`（`n/m`，空清单返回 `null`）、`allSubtasksDone`，4 例单测。**未做**：`taskTree()` 建树——一层子任务用 `queryTasks({ parentId })` 就够，「一层限制」的校验在仓储层（`assertTopLevelParent`） |
 | `shared/utils/task-dates.ts` | **S4 已实现**：存储实例 ↔ 日期/时刻控件值互转（非法日期拒绝而非进位）、今天/明天 = 本地零点、开关「含时刻」｜**未做**：本周末 / 下周 / 自定义偏移——等 S5 之后的日期选择器有真实落点再补 |
-| `main/services/undo.ts` | 逆操作栈（上限、覆盖的操作集、栈空返回 `ok(null)`） |
+| `main/services/undo.ts` | **S7 已实现**：内存逆操作栈——条目是"要放回的行"的快照列表、上限 `UNDO_LIMIT = 30`、`popUndo` 消费不压回、`clearUndo()` 供测试隔离；空栈由 `undoLastWrite` 回 `null`（handler 转 `ok(null)`）。8 例单测（撤销创建/补丁/删除/整批/勾选生成行/排序/空栈/不自我撤销） |
+| `main/services/attachments.ts` | **S7 已实现**：`attachFiles` / `listAttachments` / `readAttachment` / `detachAttachment`；`name`（basename，空则回退整路径）与 `size`（`statSync` 失败即 `null`）在主进程现读，不 import electron，5 例单测（真临时文件、文件消失仍记行、移除行不删文件） |
 | `shared/contracts/task.ts` | zod 边界：空标题、超长、优先级越界、非法 `dueAt`、两层子任务被拒 |
 
 ---
@@ -180,10 +184,10 @@ ALTER TABLE tasks ADD COLUMN remind_lead_min INTEGER;  -- 提前 N 分钟提醒�
 | **S4 详情与字段编辑 ✅** | 全屏详情、全部基础字段、即时保存（D9）、`Esc` 返回 | 冒烟：改优先级/截止 → 断言列表 chip 变化且重启后一致（24/24 实测通过） |
 | **S5 排序与拖拽 ✅** | 组内 DnD（pointer）+ `Alt+↑/↓`；跨清单推迟到 M03 | 冒烟：`Alt+↓` → 断言列表重画成新顺序且焦点仍在被移动的行 → `Alt+↑` 复位 → 抓抓手拖到下一行下方 → 断言落库顺序；重启后顺序不变（`sort_order` 子集重排 + 焦点保持 + 合成拖拽共 29/29 实测通过） |
 | **S6 子任务与重复 ✅** | 一层子任务 + `n/m`；重复预设 + 自定义；完成后生成下一次到期 | RRULE 单测（12 例）+ 服务层真库用例（勾选生成下一次、`after_completion` 重锚、`COUNT` 用尽不生成、新实例无子任务）；冒烟：在详情里录一条子任务（断言 `parentId` 指向父行且光标留在输入框）→ 点「每天」断言库里存上 `FREQ=DAILY` → `Esc` 后从 DOM 读父行的 `0/1` chip → **重启后**打开这条重复任务勾选完成 → 断言一次写入报出两行、顶层从 2 行变 3 行、新行是 `todo` / `FREQ=DAILY` / 到期为后天本地零点 / 无子任务 → `Esc` 后断言列表把新实例画在已完成那行的位置上（`Esc` 之后才读列表：详情打开时屏幕上就没有列表） |
-| **S7 P1 收尾** | 撤销 + 批量 + 附件 | 冒烟：删除 → `Ctrl+Z` → 断言回来；批量改优先级 |
+| **S7 撤销 / 批量 / 附件 ✅** | 内存逆操作栈（快照语义）+ 批量三条命令（一次写入/通知/撤销条目）+ 附件只存引用 | 撤销栈单测 13 例（含整批一条、勾选生成行、不自我撤销）+ 附件单测 5 例；冒烟 phase 7/8：勾选两条行 → 断言批量条 `data-count="2"` → 批量「高优先级」→ 断言一条 `updated` 报出两个 id、收件箱两行 `priority=3`、批量条消失 → 一次 `Ctrl+Z` → 断言一条 `undone` 报出两个 id、两行优先级回到命令前的值（`smoke:tasks` 48/48、`smoke:marker` 14/14 实测通过） |
 | **S8（可选，M01 收尾）** | 右键菜单（快速新增 / 今天 / 设置 / 暂停提醒 / 退出）——S3 之后「快速新增」已有落点 | 冒烟：右键 → 断言菜单与首项行为 |
 
-S0–S6 已全部过门，主干可交付「能记事、能改、能排序、能拆清单、能重复」——M02 的 P0 已全部落地；S7/S8 已按拍板范围一并做。
+S0–S7 已全部过门，主干可交付「能记事、能改、能排序、能拆清单、能重复、能撤销与批量」——M02 的 P0 与 P1 均已落地；S8 按拍板范围一并做。
 
 ---
 
@@ -197,6 +201,7 @@ S0–S6 已全部过门，主干可交付「能记事、能改、能排序、能
 - **冒烟里的控件定位走 DevTools 协议**（S4 起）：脚本按 `data-field` 名直接设焦点，不再靠数 Tab 次数。数次数的那版是坏的：Chromium 只在窗口持有前台时才认 Tab 这类焦点移动，脚本拿不到前台，于是 Tab 不改变焦点而按次数照按，随后的回车就落到别的控件上
 - **冒烟里的拖拽是合成鼠标事件**（S5 起）：`Input.dispatchMouseEvent` 的 press/move/release 会被 Chromium 转成 pointer 事件，于是面板自己的 pointer 处理链（含 `setPointerCapture`）真的跑一遍——不需要真鼠标，也不需要前台；坐标取自页面自己的矩形，因此脚本不必知道窗口在屏幕上的位置
 - **冒烟里的列表只在自己上屏时才报**（S6 发现）：`tasks-rendered` 由列表组件上报，而详情打开时 App 画的是详情、列表根本没挂载，所以勾完任务要先 `Esc` 回列表才能读到它画了什么；同理 `readTasks()` 默认只取顶层（`parent_id IS NULL`）——`sort_order` 是**组内**序号，把父子两组合在一起按它排序会让两组互相插序，第一版就是因此在加了子任务之后读错行
+- **冒烟要按"列表画了什么"来选行，而不是按"库里有什么"**（S7 发现）：`readTasks()` 不带收件箱过滤，勾完成的任务仍在表里，于是第一版把已完成那行也当成可选行、去点一个屏幕上不存在的选择框。S7 加了 `inboxRows()`——按 `todo`/`doing` 过滤，与面板的 `INBOX_FILTER` 对齐；`Ctrl+Z` 也证实能被 DevTools 协议送进渲染进程（面板把监听挂在 `window` 上，`event.ctrlKey` 由修饰位给出）
 - **手动验收**（我会自己操控电脑跑一遍）：中文输入法下回车建任务、DPI 150%、约 500 条任务的滚动流畅度、多显示器上面板贴边
 - **性能取舍**：本轮**不做列表虚拟化**——先用真实数据量测一次；只有当渲染明显掉帧才引入（避免为不存在的问题写复杂代码），结论写回 §9.7 性能预算
 

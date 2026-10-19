@@ -79,6 +79,10 @@ export function TaskDetail({
   const subtasks = usePanelStore((state) => state.subtasks);
   const addSubtask = usePanelStore((state) => state.addSubtask);
   const removeSubtask = usePanelStore((state) => state.removeSubtask);
+  const attachments = usePanelStore((state) => state.attachments);
+  const pickAttachments = usePanelStore((state) => state.pickAttachments);
+  const removeAttachment = usePanelStore((state) => state.removeAttachment);
+  const openAttachment = usePanelStore((state) => state.openAttachment);
   const toggleTask = usePanelStore((state) => state.toggleTask);
 
   /**
@@ -561,6 +565,63 @@ export function TaskDetail({
           />
         </Field>
 
+        <Field label={t('detail.attachments')}>
+          <ul className="flex flex-col gap-0.5">
+            {attachments.map((attachment) => (
+              <li key={attachment.id} className="flex items-center gap-2">
+                {/*
+                 * The whole name is a button, because opening the file is the one
+                 * thing an attachment is for; `title` and `data-path` carry where it
+                 * actually lives, which is the part too long to draw.
+                 */}
+                <button
+                  type="button"
+                  data-field="detail-attachment-open"
+                  data-attachment-id={attachment.id}
+                  data-path={attachment.path}
+                  title={attachment.path}
+                  onClick={() => void openAttachment(attachment.id)}
+                  className="min-w-0 flex-1 truncate text-left text-xs text-[var(--text-primary)] hover:underline"
+                >
+                  {attachment.name ?? attachment.path}
+                </button>
+                {attachment.size !== null && (
+                  <span className="shrink-0 text-[11px] text-[var(--text-muted)]">
+                    {sizeLabel(attachment.size)}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  aria-label={t('detail.attachments.remove', {
+                    name: attachment.name ?? attachment.path,
+                  })}
+                  data-field="detail-attachment-remove"
+                  data-attachment-id={attachment.id}
+                  // The row goes; the file does not. The app never owns the file, and
+                  // a click in a task list is no place to delete a document (S7).
+                  onClick={() => void removeAttachment(attachment.id)}
+                  className="shrink-0 rounded px-1 text-xs text-[var(--text-muted)] hover:text-[var(--status-overdue)]"
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+          {/*
+           * A button rather than a drop zone: the file is chosen in the OS picker the
+           * main process opens, so there is no path for a page to hand over and no
+           * need for the panel to know which files it is allowed to read (S7).
+           */}
+          <button
+            type="button"
+            data-field="detail-attachment-add"
+            onClick={() => void pickAttachments()}
+            className="mt-1.5 self-start rounded-md border border-[var(--border-default)] px-2 py-1 text-xs text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+          >
+            {t('detail.attachments.add')}
+          </button>
+        </Field>
+
         {/*
          * Deletion is a soft delete, so the row still exists and M02 S7's undo can
          * bring it back; there is no confirm dialog to interrupt with, which is
@@ -577,6 +638,21 @@ export function TaskDetail({
       </div>
     </div>
   );
+}
+
+/**
+ * A size the eye can compare at a glance ("2.4 MB"); the exact byte count is noise
+ * in a list this narrow.
+ */
+function sizeLabel(size: number): string {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = size;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return unit === 0 ? `${value} ${units[unit]}` : `${value.toFixed(1)} ${units[unit]}`;
 }
 
 function Field({ label, children }: { label: string; children: ReactNode }): ReactElement {

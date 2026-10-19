@@ -55,6 +55,30 @@ export const IPC = {
     delete: 'task:delete',
     restore: 'task:restore',
     reorder: 'task:reorder',
+    /**
+     * Renderer -> main: apply one command to a multi-selection in a single write.
+     * One write, one notification, one undo entry — whatever the row count (S7).
+     */
+    bulk: 'task:bulk',
+    /**
+     * Renderer -> main: take the newest write back (M02 D7). The stack lives in the
+     * main process, so a restart — and the collapse the panel does on blur — does
+     * not lose it, and the panel itself has nothing to keep in sync.
+     */
+    undo: 'task:undo',
+  },
+  attachment: {
+    /** Renderer -> main: the attachments (references) hung on one task. */
+    list: 'attachment:list',
+    /**
+     * Renderer -> main: present the OS file picker and store what it returns. The
+     * dialog belongs to the main process — a renderer cannot open one, and a path
+     * has to be typed in by the user rather than sent from a page (S7).
+     */
+    add: 'attachment:add',
+    remove: 'attachment:remove',
+    /** Open the file with its OS handler. */
+    open: 'attachment:open',
   },
   i18n: {
     setLocale: 'i18n:set-locale',

@@ -1,19 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { TaskWithTags } from '@shared/types/task';
 
 import { withTempDatabase } from '../db/test-db';
 import {
+  bulkTasks,
   createTaskFromInput,
   deleteTasks,
   listTasks,
   readTask,
   reorderTaskGroup,
   restoreTasks,
+  undoLastWrite,
   updateTaskFromPatch,
 } from './tasks';
+import { clearUndo } from './undo';
 
 const NOW = new Date(2026, 4, 12, 10, 0, 0).getTime();
+
+// The stack is one per process, so it would otherwise carry entries from the test
+// before into the next one — which is exactly what the app never does, since each
+// smoke run starts its own process.
+beforeEach(() => clearUndo());
 
 describe('createTaskFromInput', () => {
   it('returns the stored task with its tags and a created change', () => {
@@ -341,6 +349,182 @@ describe('reorderTaskGroup', () => {
       ]);
       // The reorder did not disturb the top level.
       expect(listTasks({ parentId: null }).map((task) => task.title)).toEqual(['parent']);
+    });
+  });
+});
+
+describe('bulkTasks', () => {
+  it('ticks the whole selection off in one write and reports every row', () => {
+    withTempDatabase(() => {
+      const first = createTaskFromInput({ title: 'a' }, NOW).task;
+      const second = createTaskFromInput({ title: 'b' }, NOW + 1).task;
+
+      const { affected, change } = bulkTasks({ ids: [first.id, second.id], op: { kind: 'complete' } }, NOW + 2);
+
+      expect(affected).toBe(2);
+      expect(change).toEqual({ kind: 'updated', ids: [first.id, second.id] });
+      expect(listTasks().map((task) => task.status)).toEqual(['done', 'done']);
+    });
+  });
+
+  it('raises a selection to one priority', () => {
+    withTempDatabase(() => {
+      const first = createTaskFromInput({ title: 'a' }, NOW).task;
+      const second = createTaskFromInput({ title: 'b', priority: 1 }, NOW + 1).task;
+
+      bulkTasks({ ids: [first.id, second.id], op: { kind: 'priority', priority: 3 } }, NOW + 2);
+
+      expect(listTasks().map((task) => task.priority)).toEqual([3, 3]);
+    });
+  });
+
+  it('routes a bulk delete through the cascade the single delete uses', () => {
+    withTempDatabase(() => {
+      const parent = createTaskFromInput({ title: 'parent' }, NOW).task;
+      const child = createTaskFromInput({ title: 'child', parentId: parent.id }, NOW + 1).task;
+
+      const { affected, change } = bulkTasks({ ids: [parent.id], op: { kind: 'delete' } }, NOW + 2);
+
+      // The subtask goes down with its parent, exactly as a single delete takes it.
+      expect(affected).toBe(2);
+      expect(change).toEqual({ kind: 'deleted', ids: [parent.id] });
+      expect(readTask(child.id)?.deletedAt).toBe(NOW + 2);
+    });
+  });
+
+  it('takes a repeating selection forward once, not once per row', () => {
+    withTempDatabase(() => {
+      const repeating = createTaskFromInput(
+        { title: 'stand-up', dueAt: NOW, dueHasTime: false, repeatRule: 'FREQ=DAILY', repeatMode: 'fixed' },
+        NOW,
+      ).task;
+      const plain = createTaskFromInput({ title: 'one-off' }, NOW + 1).task;
+
+      const { change } = bulkTasks({ ids: [repeating.id, plain.id], op: { kind: 'complete' } }, NOW + 2);
+
+      // Two rows were ticked, and one of them minted its next occurrence: the
+      // notification names all three, so the panel re-reads everything that moved.
+      expect(change.ids).toHaveLength(3);
+      // The completed row keeps its place, and the occurrence it minted is appended
+      // after the rows that were already there.
+      expect(listTasks().map((task) => task.status)).toEqual(['done', 'done', 'todo']);
+    });
+  });
+
+  it('writes nothing and announces nothing when the ids are unknown', () => {
+    withTempDatabase(() => {
+      const { affected } = bulkTasks({ ids: ['nope'], op: { kind: 'complete' } }, NOW);
+
+      expect(affected).toBe(0);
+    });
+  });
+});
+
+describe('the undo stack', () => {
+  it('takes back a create by deleting the row it made', () => {
+    withTempDatabase(() => {
+      const { task } = createTaskFromInput({ title: 'typo' }, NOW);
+
+      const change = undoLastWrite(NOW + 1);
+
+      expect(change).toEqual({ kind: 'undone', ids: [task.id] });
+      expect(listTasks()).toEqual([]);
+      expect(readTask(task.id)?.deletedAt).toBe(NOW + 1);
+    });
+  });
+
+  it('puts a row back the way it was before the patch, tags included', () => {
+    withTempDatabase(() => {
+      const { task } = createTaskFromInput(
+        { title: 'Buy milk', tags: ['shop'], priority: 1 },
+        NOW,
+      );
+
+      updateTaskFromPatch(task.id, { title: 'Buy oat milk', priority: 3, tags: ['shop', 'veg'] }, NOW + 1);
+      undoLastWrite(NOW + 2);
+
+      const back = readTask(task.id);
+      expect(back?.title).toBe('Buy milk');
+      expect(back?.priority).toBe(1);
+      // An empty list here would have dropped the tag the row still had.
+      expect(back?.tags).toEqual(['shop']);
+    });
+  });
+
+  it('brings a binned row back, its subtasks with it', () => {
+    withTempDatabase(() => {
+      const parent = createTaskFromInput({ title: 'parent' }, NOW).task;
+      const child = createTaskFromInput({ title: 'child', parentId: parent.id }, NOW + 1).task;
+      deleteTasks([parent.id], NOW + 2);
+
+      undoLastWrite(NOW + 3);
+
+      expect(listTasks().map((task) => task.id).sort()).toEqual([parent.id, child.id].sort());
+      expect(readTask(child.id)?.deletedAt).toBeNull();
+    });
+  });
+
+  it('takes back a whole bulk command as one entry', () => {
+    withTempDatabase(() => {
+      const first = createTaskFromInput({ title: 'a' }, NOW).task;
+      const second = createTaskFromInput({ title: 'b' }, NOW + 1).task;
+      bulkTasks({ ids: [first.id, second.id], op: { kind: 'complete' } }, NOW + 2);
+
+      // One `Ctrl+Z`, not one per row.
+      const change = undoLastWrite(NOW + 3);
+
+      expect(change?.ids).toEqual([first.id, second.id]);
+      expect(listTasks().map((task) => task.status)).toEqual(['todo', 'todo']);
+    });
+  });
+
+  it('takes back the occurrence a tick minted, not only the tick', () => {
+    withTempDatabase(() => {
+      const repeating = createTaskFromInput(
+        { title: 'stand-up', dueAt: NOW, dueHasTime: false, repeatRule: 'FREQ=DAILY', repeatMode: 'fixed' },
+        NOW,
+      ).task;
+
+      updateTaskFromPatch(repeating.id, { status: 'done' }, NOW + 1);
+      expect(listTasks()).toHaveLength(2);
+
+      undoLastWrite(NOW + 2);
+
+      // The tick is reversed and the minted row is gone with it, so the list is
+      // back to the one open task it started with.
+      expect(listTasks().map((task) => task.status)).toEqual(['todo']);
+    });
+  });
+
+  it('restores the order a reorder wrote, and leaves the tags alone', () => {
+    withTempDatabase(() => {
+      const { task: first } = createTaskFromInput({ title: 'a', tags: ['keep'] }, NOW);
+      const second = createTaskFromInput({ title: 'b' }, NOW + 1).task;
+
+      reorderTaskGroup({ kind: 'top', listId: null }, [second.id, first.id], NOW + 2);
+      undoLastWrite(NOW + 3);
+
+      expect(listTasks().map((task) => task.title)).toEqual(['a', 'b']);
+      // A reorder never touches tags, so taking it back must not either.
+      expect(readTask(first.id)?.tags).toEqual(['keep']);
+    });
+  });
+
+  it('answers null instead of throwing when there is nothing left to undo', () => {
+    withTempDatabase(() => {
+      expect(undoLastWrite(NOW)).toBeNull();
+    });
+  });
+
+  it('does not undo its own undo', () => {
+    withTempDatabase(() => {
+      const { task } = createTaskFromInput({ title: 'x' }, NOW + 1);
+
+      undoLastWrite(NOW + 2);
+      // The entry was consumed, so the next press does nothing rather than putting
+      // the row back and forth.
+      expect(undoLastWrite(NOW + 3)).toBeNull();
+      expect(readTask(task.id)?.deletedAt).toBe(NOW + 2);
     });
   });
 });
