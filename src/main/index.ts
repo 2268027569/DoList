@@ -20,6 +20,7 @@ import { appSettings, resolveBoot } from './services/settings';
 import { reconcileReminders } from './services/tasks';
 import { createMarkerWindow } from './windows/marker';
 import { createPanelWindow, expandPanel } from './windows/panel';
+import { configureDetailWindows } from './windows/detail';
 import { configureReminderWindows } from './windows/reminder';
 
 const log = createLogger('bootstrap');
@@ -82,9 +83,12 @@ async function start(): Promise<void> {
   log('===== group 4/6 · ipc handlers');
   registerIpcHandlers();
 
-  log('===== group 5/6 · windows (marker + panel + reminder)');
+  log('===== group 5/6 · windows (marker + panel + detail + reminder)');
   createMarkerWindow(boot);
   createPanelWindow(boot);
+  // The detail is placed from the panel's rectangle and leaves with the panel, so it
+  // is configured after both exist (M02 D6).
+  configureDetailWindows(boot);
   // The popup is placed from the marker's rectangle and has to follow it, so it is
   // configured after the marker exists and before anything can be announced (§5.3).
   configureReminderWindows(boot);

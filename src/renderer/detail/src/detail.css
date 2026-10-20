@@ -1,0 +1,89 @@
+/*
+ * The task detail window's stylesheet. Tailwind plus the shared base layer, exactly
+ * like the panel's: the window is opened on demand, so it may pay for the utility
+ * sheet in the way the permanently resident marker may not (docs/ARCHITECTURE.md §2).
+ */
+@import 'tailwindcss';
+@import '../../shared-ui/base.css';
+
+/*
+ * The OS draws its own chrome — scrollbar tracks, the date and time pickers, the popup
+ * behind a number field — in whichever colour scheme this names. Without it a dark card
+ * is interrupted by bright white native controls, and this screen is the one full of
+ * them (docs/ARCHITECTURE.md §7). Same rule the panel and the popup apply.
+ */
+:root[data-mode='light'] {
+  color-scheme: light;
+}
+
+:root[data-mode='dark'] {
+  color-scheme: dark;
+}
+
+/*
+ * A scrollbar the theme can live with, for anything that does end up with one.
+ */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/*
+ * The form's own scroller. A form this long has to scroll, but the bar itself is the
+ * one thing on the screen that belongs to the OS rather than to the theme, so it is
+ * hidden rather than themed: the wheel, the arrow keys and Tab all still move the view.
+ */
+.detail-scroll {
+  scrollbar-width: none;
+}
+
+.detail-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/*
+ * The card, and its ease-in.
+ *
+ * The window is created at its final size and place, so only opacity and transform
+ * animate — the compositor does this, and no frame of it touches window bounds
+ * (§7, §9.1). The card rises a few pixels into place as it fades in, which is what
+ * makes it read as a window arriving rather than one that was always there.
+ *
+ * The surface is mixed with transparency the way the panel's is, so the two read as
+ * one assembly rather than two unrelated windows.
+ */
+.detail-card {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.98);
+  transition-property: opacity, transform;
+  transition-timing-function: var(--ease-emphasized), var(--ease-spring);
+  background-color: color-mix(
+    in srgb,
+    var(--bg-surface) calc(var(--panel-opacity, 1) * 100%),
+    transparent
+  );
+}
+
+.detail-card[data-phase='open'] {
+  opacity: 1;
+  transform: scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .detail-card {
+    transition-duration: 1ms !important;
+  }
+}

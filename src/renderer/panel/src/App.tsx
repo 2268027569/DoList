@@ -9,7 +9,6 @@ import { applyBootParams } from '../../shared-ui/boot';
 import { changeLocale } from '../../shared-ui/i18n';
 import { PanelSettings } from './panel-settings';
 import { QuickAdd } from './quick-add';
-import { TaskDetail } from './task-detail';
 import { TaskList } from './task-list';
 import { usePanelStore } from './store';
 import { usePanelOpacity } from './use-panel-opacity';
@@ -18,24 +17,22 @@ import { ViewSidebar } from './view-sidebar';
 import { VIEW_COPY } from './views';
 
 /**
- * The panel surface: either the current view's list or the open task's detail, never
- * both (M02 D6 — the panel is only 320–640 DIP wide, so the detail replaces the list
- * instead of sitting beside it). Which view the list is showing is the sidebar's
- * choice alone (M03 D1); the header only names the one that is showing.
+ * The panel surface: the current view's list, and only ever the list.
+ *
+ * The task detail is no longer a page of this window (M02 D6) — it is a window of its
+ * own that opens beside the panel, so the list stays visible and clickable while a task
+ * is edited. Which view the list is showing is the sidebar's choice alone (M03 D1); the
+ * header only names the one that is showing.
  */
 export function App({ boot }: { boot: BootParams }): ReactElement {
   const { t } = useTranslation(['common', 'tasks']);
   const setBoot = usePanelStore((state) => state.setBoot);
   const setPanelState = usePanelStore((state) => state.setPanelState);
   const refreshTasks = usePanelStore((state) => state.refreshTasks);
-  const refreshOpenTask = usePanelStore((state) => state.refreshOpenTask);
-  const closeTaskDetail = usePanelStore((state) => state.closeTaskDetail);
   const undo = usePanelStore((state) => state.undo);
   const view = usePanelStore((state) => state.view);
   const setView = usePanelStore((state) => state.setView);
   const tasks = usePanelStore((state) => state.tasks);
-  const openTask = usePanelStore((state) => state.openTask);
-  const openTaskDetail = usePanelStore((state) => state.openTaskDetail);
   const [open, setOpen] = useState(false);
   const [durationMs, setDurationMs] = useState(160);
   const resize = usePanelResize();
@@ -49,7 +46,8 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
 
   // The surface's transparency is a variable, not a colour: the card mixes it into
   // whatever `--bg-surface` the active theme provides, so the text keeps its
-  // contrast and only the panel's own background fades (panel.css).
+  // contrast and only the panel's own background fades (panel.css). The detail window
+  // reads the same value from its boot parameters, so the two cards fade together.
   useEffect(() => {
     document.documentElement.style.setProperty('--panel-opacity', String(opacity));
   }, [opacity]);
@@ -58,13 +56,12 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
     void refreshTasks();
     // One write, one fetch: the main process announces what changed and this is
     // what turns that into rows, rather than keeping a second copy of the data
-    // in step by hand (M02 D4). The open detail is a second read, so it re-reads
-    // too — a task marked done here is the only way to see its own change.
+    // in step by hand (M02 D4). The detail window keeps its own copy of its own row
+    // and re-reads on the same event, from its own renderer.
     return window.api.on.taskChanged(() => {
       void refreshTasks();
-      void refreshOpenTask();
     });
-  }, [refreshTasks, refreshOpenTask]);
+  }, [refreshTasks]);
 
   useEffect(() => {
     return window.api.on.panelState(({ state, durationMs: duration }) => {
@@ -75,30 +72,26 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
   }, [setPanelState]);
 
   // The app menu's 今日 item (M02 S8) asks for a view rather than moving the window
-  // itself: the view lives in the store, and the sidebar sets the same field. Opening
-  // straight onto the list keeps the detail from sitting on top of the view the
-  // user just asked for.
+  // itself: the view lives in the store, and the sidebar sets the same field.
   useEffect(() => {
     return window.api.on.panelView(({ view: next }) => {
-      closeTaskDetail();
       void setView(next);
     });
-  }, [closeTaskDetail, setView]);
+  }, [setView]);
 
   /*
    * The toast's click, and only it: a reminder that goes unanswered is announced by
    * its own popup window (M04), so the panel has nothing to draw for one and no
    * reminder subscription to keep.
    *
-   * The focus handler leaves the view alone: opening a task jumps the list out of the
-   * way anyway (the detail replaces it, M02 D6), so switching views underneath would be
-   * a change the user never asked for and would see on the way back.
+   * Focusing a task opens the detail window beside the panel, leaving the list where it
+   * was — the user asked to see one task, not to leave the view they were reading.
    */
   useEffect(() => {
     return window.api.on.taskFocus(({ taskId }) => {
-      void openTaskDetail(taskId);
+      void window.api.detail.open(taskId);
     });
-  }, [openTaskDetail]);
+  }, []);
 
   useEffect(() => {
     return window.api.on.themeChanged((params) => {
@@ -116,13 +109,11 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
   /*
    * `Ctrl+Z` takes the newest write back (M02 D7). It is handled here rather than on
    * a field because it has to work whichever control has the caret — including a
-   * text field, where the browser's own undo only ever reaches that field — and it
-   * has to work while the panel is showing the list or the detail.
+   * text field, where the browser's own undo only ever reaches that field.
    *
-   * Two fields keep their own undo: the quick-add and the detail's text inputs are
-   * where the *user's typing* lives, and a keystroke-level undo there is what the
-   * caret expects. Everywhere else — the body of the panel, a chip, a button — the
-   * chord means "take back the last change to the data".
+   * The quick-add is where the *user's typing* lives, and a keystroke-level undo there
+   * is what the caret expects. Everywhere else — the body of the panel, a chip, a
+   * button — the chord means "take back the last change to the data".
    */
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -152,53 +143,45 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
         style={{ transitionDuration: `${durationMs}ms` }}
         onTransitionEnd={handleTransitionEnd}
       >
-        {openTask === null ? (
-          <>
-            <header className="flex items-baseline justify-between gap-2">
-              {/*
-               * The current view's name, spelled out: the sidebar is icon-only, so this
-               * is the one place the panel says which slice of the tasks it is showing.
-               * Switching is the sidebar's job, and its only control: the two tabs that
-               * used to sit here wrote the same `view` field, and two entrances to one
-               * state leave the user unable to tell which of them is the current one.
-               */}
-              <h1
-                className="truncate text-lg font-semibold tracking-tight text-[var(--text-primary)]"
-                data-field="view-title"
-                data-view={view}
-              >
-                {t(VIEW_COPY[view].name)}
-              </h1>
-              <span className="flex shrink-0 items-baseline gap-1">
-                <span className="text-xs text-[var(--text-muted)]" data-field="view-count">
-                  {t('tasks:view.count', { count: tasks.length })}
-                </span>
-                <PanelSettings opacity={opacity} onOpacity={setOpacity} />
-              </span>
-            </header>
+        <header className="flex items-baseline justify-between gap-2">
+          {/*
+           * The current view's name, spelled out: the sidebar is icon-only, so this
+           * is the one place the panel says which slice of the tasks it is showing.
+           * Switching is the sidebar's job, and its only control: the two tabs that
+           * used to sit here wrote the same `view` field, and two entrances to one
+           * state leave the user unable to tell which of them is the current one.
+           */}
+          <h1
+            className="truncate text-lg font-semibold tracking-tight text-[var(--text-primary)]"
+            data-field="view-title"
+            data-view={view}
+          >
+            {t(VIEW_COPY[view].name)}
+          </h1>
+          <span className="flex shrink-0 items-baseline gap-1">
+            <span className="text-xs text-[var(--text-muted)]" data-field="view-count">
+              {t('tasks:view.count', { count: tasks.length })}
+            </span>
+            <PanelSettings opacity={opacity} onOpacity={setOpacity} />
+          </span>
+        </header>
 
-            <div className="flex min-h-0 flex-1 gap-2">
-              <ViewSidebar />
+        <div className="flex min-h-0 flex-1 gap-2">
+          <ViewSidebar />
 
-              <div className="flex min-w-0 flex-1 flex-col gap-3 overflow-hidden">
-                {/*
-                 * An archive has no quick-add (M03 D6): a "to do" typed into 已完成
-                 * would be a row that view is defined not to contain, and the list's
-                 * empty state says where the task belongs instead.
-                 */}
-                {isArchiveView(view) ? null : <QuickAdd />}
+          <div className="flex min-w-0 flex-1 flex-col gap-3 overflow-hidden">
+            {/*
+             * An archive has no quick-add (M03 D6): a "to do" typed into 已完成
+             * would be a row that view is defined not to contain, and the list's
+             * empty state says where the task belongs instead.
+             */}
+            {isArchiveView(view) ? null : <QuickAdd />}
 
-                <div className="flex-1 overflow-y-auto">
-                  <TaskList />
-                </div>
-              </div>
+            <div className="flex-1 overflow-y-auto">
+              <TaskList />
             </div>
-          </>
-        ) : (
-          // Keyed by the row so opening another task (or the same one again after
-          // a deletion) starts a fresh edit rather than inheriting the last draft.
-          <TaskDetail key={openTask.id} task={openTask} onBack={closeTaskDetail} />
-        )}
+          </div>
+        </div>
 
         {/*
          * Decorative for assistive tech on purpose: the panel is resized with a

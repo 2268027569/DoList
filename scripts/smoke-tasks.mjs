@@ -154,6 +154,15 @@ async function waitForEvent(type, timeoutMs, since = 0) {
   return null;
 }
 
+/** The most recent event of `type`, whether or not it happened after some step. */
+function latestEvent(type) {
+  const events = readStatus()?.events ?? [];
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index].type === type) return events[index];
+  }
+  return null;
+}
+
 /**
  * The one keystroke that has to come from the OS.
  *
@@ -310,6 +319,68 @@ async function waitForReminderPopup(taskId, timeoutMs = 12_000) {
   return { popup, card: null };
 }
 
+/**
+ * Attaches to the task detail window and waits until the form is drawn (M02 D6).
+ *
+ * The detail is a window of its own now, so its controls are on a page of their own —
+ * the panel's socket cannot see them. The two waits are separate for the same reason
+ * they are for the reminder popup: the window appears when the main process creates it,
+ * and the form a moment later, once its renderer has read the task id out of the query
+ * string — so a phase that reaches for `detail-title` has to wait for the DOM.
+ */
+async function attachDetail(timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs;
+  let detail = null;
+  while (Date.now() < deadline) {
+    if (detail === null) detail = await attachEntry('detail', 2_000);
+    if (detail !== null) {
+      let ready;
+      try {
+        ready = await evaluate(
+          detail,
+          `document.querySelector('[data-field="detail-card"]') !== null &&
+           document.querySelector('[data-field="detail-title"]') !== null`,
+        );
+      } catch {
+        // The page is mid-navigation (the window was re-pointed at another task).
+        ready = false;
+      }
+      if (ready === true) return detail;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return null;
+}
+
+/**
+ * The panel's own account of whether it is still on screen and expanded.
+ *
+ * Opening the detail takes the focus, and the panel collapses on blur — unless it is
+ * being held up for the detail, which is the whole point of the window beside it. This
+ * is the assertion that the hold works, and it is read from the panel because the panel
+ * is the surface that would have gone away.
+ */
+async function panelIsUp(cdp) {
+  return evaluate(
+    cdp,
+    `(() => {
+       const card = document.querySelector('.panel-card');
+       const list = document.querySelector('[data-field="view-title"]');
+       return card !== null && list !== null && card.dataset.phase !== 'closed';
+     })()`,
+  );
+}
+
+/**
+ * True when two window rectangles share area (M02 D6). Null bounds mean the main process
+ * could not read the panel's — which is itself a failure of the side-by-side assertion,
+ * so it is reported as an overlap rather than quietly passing.
+ */
+function rectsOverlap(a, b) {
+  if (a === null || b === null || a === undefined || b === undefined) return true;
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
+}
+
 /** Runs an expression in the panel page and returns its value. */
 async function evaluate(cdp, expression) {
   const result = await cdp.send('Runtime.evaluate', {
@@ -392,6 +463,30 @@ async function pressKey(cdp, key, modifiers = 0) {
 
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...withText });
   await cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
+}
+
+/**
+ * Presses a key whose handler takes the target window down (Escape on the detail, M02 D6).
+ *
+ * Unlike `pressKey` this cannot await both dispatches: the keydown handler destroys the
+ * renderer the next event would be delivered to, so the protocol never answers the keyup
+ * and the run hangs on the very step that proved the close works. The keydown gets a
+ * ceiling for the same reason — a renderer that goes away mid-dispatch is a success here,
+ * not an error.
+ */
+async function pressKeyToClose(cdp, key) {
+  const spec = KEYS[key];
+  if (spec === undefined) throw new Error(`the harness has no key spec for "${key}"`);
+
+  const base = { key, code: spec.code, windowsVirtualKeyCode: spec.virtualKey, nativeVirtualKeyCode: spec.virtualKey };
+  const withText =
+    spec.text === undefined ? base : { ...base, text: spec.text, unmodifiedText: spec.text };
+
+  await Promise.race([
+    cdp.send('Input.dispatchKeyEvent', { type: 'keyDown', ...withText }).catch(() => undefined),
+    new Promise((resolve) => setTimeout(resolve, 1_000)),
+  ]);
+  cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base }).catch(() => undefined);
 }
 
 /**
@@ -1114,14 +1209,10 @@ async function main() {
 
     // --- phase 4: the detail view edits the first task (slice S4) -------------
     const firstId = rows[0].id;
-    const onRow = await gotoField(cdp, 'task-title', firstId);
-    if (onRow === 'task-title') pass('the first row took the focus by name');
-
-    const detailOpened = await (async () => {
-      const since = Date.now();
-      await pressKey(cdp, 'Enter');
-      return waitForEvent('detail-opened', 5_000, since);
-    })();
+    await gotoField(cdp, 'task-title', firstId);
+    const openedAt = Date.now();
+    await pressKey(cdp, 'Enter');
+    const detailOpened = await waitForEvent('detail-opened', 5_000, openedAt);
     if (
       detailOpened?.detail?.title === FIRST_TASK &&
       detailOpened?.detail?.taskId === firstId &&
@@ -1132,8 +1223,41 @@ async function main() {
       fail(`the detail did not open on the expected row: ${JSON.stringify(detailOpened?.detail ?? null)}`);
     }
 
-    await gotoField(cdp, 'detail-due-tomorrow');
-    const dueChanged = await pressKeyAndWait(cdp, 'Enter');
+    /*
+     * The detail is a window of its own now (M02 D6), so the rest of this phase runs on
+     * its page rather than the panel's. The window appears when the main process creates
+     * it and the form a moment later, so `attachDetail` waits for `detail-title` to
+     * exist rather than for the target to appear.
+     */
+    const detail = await attachDetail();
+    if (detail !== null) pass('the detail opened in a window of its own');
+    else fail('the detail window never drew its form');
+    if (detail === null) return;
+
+    // The list behind it must still be up: that is the whole reason for the separate
+    // window, and the panel collapses on blur unless it is held (windows/panel.ts).
+    if ((await panelIsUp(cdp)) === true) {
+      pass('the list stayed up and usable beside the detail');
+    } else {
+      fail('the list went away when the detail opened');
+    }
+
+    // Position, not merely existence: it opens beside the panel, not over it.
+    const detailWindow = await waitForEvent('detail-window-opened', 5_000, openedAt);
+    if (
+      detailWindow !== null &&
+      !rectsOverlap(detailWindow.detail.bounds, detailWindow.detail.panelBounds)
+    ) {
+      pass('the detail window sits beside the panel, not on top of it', {
+        detail: detailWindow.detail.bounds,
+        panel: detailWindow.detail.panelBounds,
+      });
+    } else {
+      fail(`the detail window overlapped the panel: ${JSON.stringify(detailWindow?.detail ?? null)}`);
+    }
+
+    await gotoField(detail, 'detail-due-tomorrow');
+    const dueChanged = await pressKeyAndWait(detail, 'Enter');
     if (dueChanged?.detail?.kind === 'updated') {
       pass('pressing "Tomorrow" saved the due date', dueChanged.detail);
     } else {
@@ -1150,8 +1274,8 @@ async function main() {
       fail(`the due date landed on ${rows[0].dueAt}, expected ${dayStart(1)} with no clock time`);
     }
 
-    await gotoField(cdp, 'detail-priority-high');
-    const priorityChanged = await pressKeyAndWait(cdp, 'Enter');
+    await gotoField(detail, 'detail-priority-high');
+    const priorityChanged = await pressKeyAndWait(detail, 'Enter');
     if (priorityChanged?.detail?.kind === 'updated') {
       pass('pressing "High priority" saved the priority', priorityChanged.detail);
     } else {
@@ -1165,15 +1289,25 @@ async function main() {
       fail(`the priority is ${rows[0].priority}, expected 3`);
     }
 
-    // --- phase 4b: Escape goes back to the list ------------------------------
+    // --- phase 4b: Escape puts the window away, the list stays where it was ---
+    // Pressed on the detail's own page: it is the detail that listens for Escape now,
+    // and the panel's page does not hold the focus while the detail is up.
     const since = Date.now();
-    await pressKey(cdp, 'Escape');
+    await pressKeyToClose(detail, 'Escape');
     const detailClosed = await waitForEvent('detail-closed', 5_000, since);
-    const backToList = await waitForEvent('tasks-rendered', 5_000, since);
+    // The list is refreshed by the write, not by the window closing — the last render is
+    // the one the panel drew *after* both edits, and `panelIsUp` below is what proves
+    // that render is still on screen now that the detail is gone.
+    const backToList = latestEvent('tasks-rendered');
     if (detailClosed !== null && detailClosed.detail?.taskId === firstId) {
-      pass('Escape closed the detail');
+      pass('Escape closed the detail window');
     } else {
       fail(`Escape did not close the detail: ${JSON.stringify(detailClosed?.detail ?? null)}`);
+    }
+    if ((await panelIsUp(cdp)) === true) {
+      pass('the list was still up, untouched, once the detail closed');
+    } else {
+      fail('the list was not up after the detail closed');
     }
     // The chips are drawn by the same pure function the row uses, so reading them
     // here is the list's own report of what the two edits produced.
@@ -1249,11 +1383,18 @@ async function main() {
       fail(`the detail did not reopen on ${firstId}: ${JSON.stringify(reopened?.detail ?? null)}`);
     }
 
-    await gotoField(cdp, 'detail-subtask-input');
+    // Everything below is on the detail's own page, not the panel's (M02 D6).
+    const form = await attachDetail();
+    if (form === null) {
+      fail('the reopened detail window never drew its form');
+      return;
+    }
+
+    await gotoField(form, 'detail-subtask-input');
     const subtaskAdded = await (async () => {
       const since = Date.now();
-      await typeText(cdp, SUBTASK);
-      await pressKey(cdp, 'Enter');
+      await typeText(form, SUBTASK);
+      await pressKey(form, 'Enter');
       return waitForEvent('task-changed', 8_000, since);
     })();
     rows = readTasks('all');
@@ -1265,15 +1406,15 @@ async function main() {
     }
     // The field is left ready for the next one, like quick-add — which is the
     // difference between a checklist and a form.
-    const caretAfterSubtask = await activeField(cdp);
+    const caretAfterSubtask = await activeField(form);
     if (caretAfterSubtask === 'detail-subtask-input') {
       pass('the caret stayed in the subtask field after Enter');
     } else {
       fail(`the caret moved to "${caretAfterSubtask}" after adding a subtask`);
     }
 
-    await gotoField(cdp, 'detail-repeat-daily');
-    const repeatSet = await pressKeyAndWait(cdp, 'Enter');
+    await gotoField(form, 'detail-repeat-daily');
+    const repeatSet = await pressKeyAndWait(form, 'Enter');
     rows = readTasks();
     const repeated = rows.find((row) => row.id === firstId);
     if (repeatSet?.detail?.kind === 'updated' && repeated?.repeatRule === 'FREQ=DAILY') {
@@ -1289,11 +1430,11 @@ async function main() {
     // rather than merely pointed at, that an image comes back with a preview while a
     // plain file does not, and that removing one row takes the app's copy with it and
     // leaves the file the user picked alone.
-    await gotoField(cdp, 'detail-attachment-add');
-    await pressKey(cdp, 'Enter');
+    await gotoField(form, 'detail-attachment-add');
+    await pressKey(form, 'Enter');
 
     const drawn = await waitForEval(
-      cdp,
+      form,
       `(() => {
          const opens = document.querySelectorAll('[data-field="detail-attachment-open"]').length;
          const previews = document.querySelectorAll('[data-thumbnail]').length;
@@ -1340,7 +1481,7 @@ async function main() {
     // The preview is read off the page rather than trusted from the main process: the
     // card's own image element, with a data URL on it.
     const preview = await evaluate(
-      cdp,
+      form,
       `(() => {
          const node = document.querySelector('[data-thumbnail="${copiedImage?.id ?? 'none'}"]');
          return node === null ? null : node.getAttribute('src').slice(0, 15);
@@ -1356,7 +1497,7 @@ async function main() {
     // OS, and a photo viewer opening over the run is not a check. What is checked is
     // that the control names the copy, which is the part the panel is responsible for.
     const openedPath = await evaluate(
-      cdp,
+      form,
       `(() => {
          const node = document.querySelector('[data-attachment-id="${copiedImage?.id ?? 'none'}"]');
          return node === null ? null : node.dataset.path;
@@ -1368,11 +1509,11 @@ async function main() {
       fail(`the open control points at ${JSON.stringify(openedPath)}, expected the copied path`);
     }
 
-    await gotoAttachmentField(cdp, 'detail-attachment-remove', copiedImage?.id ?? '');
-    await pressKey(cdp, 'Enter');
+    await gotoAttachmentField(form, 'detail-attachment-remove', copiedImage?.id ?? '');
+    await pressKey(form, 'Enter');
 
     const afterRemove = await waitForEval(
-      cdp,
+      form,
       `document.querySelectorAll('[data-field="detail-attachment-open"]').length === 1`,
     );
     const remaining = readAttachments(firstId);
@@ -1394,7 +1535,7 @@ async function main() {
     }
 
     const plainRow = await evaluate(
-      cdp,
+      form,
       `(() => {
          const node = document.querySelector('[data-field="detail-attachment-open"]');
          const text = node === null ? null : node.textContent.trim();
@@ -1407,10 +1548,11 @@ async function main() {
       fail(`the remaining attachment drew ${JSON.stringify(plainRow)}, expected the file's name and no preview`);
     }
 
-    // Escape, then read the tally off the list itself: the `0/1` chip is drawn by the
-    // same pure function the row uses, so this is the list's own report (M02 S6).
+    // Escape on the detail's page, then read the tally off the list itself: the `0/1`
+    // chip is drawn by the same pure function the row uses, so this is the list's own
+    // report (M02 S6) — and reading it proves the list was there all along.
     const subtaskSince = Date.now();
-    await pressKey(cdp, 'Escape');
+    await pressKeyToClose(form, 'Escape');
     await waitForEvent('detail-closed', 5_000, subtaskSince);
     const tallyChip = await evaluate(
       cdp,
@@ -1511,9 +1653,15 @@ async function main() {
       fail(`the detail did not reopen on ${firstId}: ${JSON.stringify(detailAgain?.detail ?? null)}`);
     }
 
+    const form2 = await attachDetail();
+    if (form2 === null) {
+      fail('the restarted app never drew the detail form');
+      return;
+    }
+
     const knownIds = new Set(readTasks().map((row) => row.id));
-    await gotoField(cdp, 'detail-status-done');
-    const ticked = await pressKeyAndWait(cdp, 'Enter');
+    await gotoField(form2, 'detail-status-done');
+    const ticked = await pressKeyAndWait(form2, 'Enter');
     if (ticked?.detail?.kind === 'updated' && (ticked.detail.ids?.length ?? 0) === 2) {
       pass('ticking the task was announced as one update naming both rows', ticked.detail);
     } else {
@@ -1558,9 +1706,11 @@ async function main() {
     // thing on screen and the thing that reports what it drew (M02 D10: the ticked row
     // leaves the Inbox filter and the new occurrence takes its place).
     const listSince = Date.now();
-    await pressKey(cdp, 'Escape');
+    await pressKeyToClose(form2, 'Escape');
     await waitForEvent('detail-closed', 5_000, listSince);
-    const afterTickRender = await waitForEvent('tasks-rendered', 5_000, listSince);
+    // The render that put this task's finished sibling away was drawn when the tick was
+    // written, before the detail closed — the window closing does not redraw the list.
+    const afterTickRender = latestEvent('tasks-rendered');
     if (
       afterTickRender?.detail?.count === 2 &&
       afterTickRender?.detail?.titles?.[0] === SECOND_TASK &&
@@ -1935,8 +2085,13 @@ async function main() {
     const openedSince = Date.now();
     await pressKey(cdp, 'Enter');
     await waitForEvent('detail-opened', 5_000, openedSince);
-    await gotoField(cdp, 'detail-status-cancelled');
-    await pressKeyAndWait(cdp, 'Enter');
+    const abandonForm = await attachDetail();
+    if (abandonForm === null) {
+      fail('the detail never drew its form for the row to abandon');
+      return;
+    }
+    await gotoField(abandonForm, 'detail-status-cancelled');
+    await pressKeyAndWait(abandonForm, 'Enter');
     const abandoned = readTasks().find((row) => row.id === abandonRow.id);
     if (abandoned?.status === 'cancelled') {
       pass(`the detail's status control abandoned "${TODAY_TASK}"`, { status: abandoned.status });
@@ -1945,7 +2100,7 @@ async function main() {
     }
 
     const closedSince = Date.now();
-    await pressKey(cdp, 'Escape');
+    await pressKeyToClose(abandonForm, 'Escape');
     await waitForEvent('detail-closed', 5_000, closedSince);
 
     // 已取消 draws only cancelled rows, and offers neither a tick nor a quick-add: a
@@ -2105,6 +2260,11 @@ async function main() {
     const remindOpenSince = Date.now();
     await pressKey(cdp, 'Enter');
     await waitForEvent('detail-opened', 5_000, remindOpenSince);
+    const remindForm = await attachDetail();
+    if (remindForm === null) {
+      fail('the detail never drew its form for the reminder task');
+      return;
+    }
 
     // The day after tomorrow, so that whatever the hour of the run the *arming* below
     // lands in the future and cannot go off on its own before the harness is watching.
@@ -2115,7 +2275,7 @@ async function main() {
       `${dueDay.getFullYear()}-${String(dueDay.getMonth() + 1).padStart(2, '0')}-` +
       `${String(dueDay.getDate()).padStart(2, '0')}`;
     const dueSetSince = Date.now();
-    await setDateField(cdp, 'detail-due-date', isoDue);
+    await setDateField(remindForm, 'detail-due-date', isoDue);
     const dueWrite = await waitForEvent('task-changed', 8_000, dueSetSince);
     if (readTasks().find((row) => row.id === remindRow.id)?.dueAt === dayStart(2)) {
       pass(`the detail gave "${REMINDER_TASK}" a deadline the day after tomorrow`, {
@@ -2136,9 +2296,9 @@ async function main() {
 
     // The preset chip: thirty minutes before the deadline. This is the write that arms
     // the instance, and the same click reschedules the scheduler onto it.
-    await gotoField(cdp, 'detail-remind-30');
+    await gotoField(remindForm, 'detail-remind-30');
     const leadSince = Date.now();
-    await pressKey(cdp, 'Enter');
+    await pressKey(remindForm, 'Enter');
     const leadWrite = await waitForEvent('task-changed', 8_000, leadSince);
 
     const expectedFireAt = dayStart(2) - 30 * 60_000;
@@ -2293,9 +2453,9 @@ async function main() {
     // The second answer, on an instance of its own: the lead is moved so the new one has
     // a moment to itself — a dismissed instance is not resurrected, and a pending one at
     // the same instant would be refused (§5.3).
-    await gotoField(cdp, 'detail-remind-60');
+    await gotoField(remindForm, 'detail-remind-60');
     const rearmSince = Date.now();
-    await pressKey(cdp, 'Enter');
+    await pressKey(remindForm, 'Enter');
     await waitForEvent('task-changed', 8_000, rearmSince);
 
     const doneEvent = await waitForEvent(

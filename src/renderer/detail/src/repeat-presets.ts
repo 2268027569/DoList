@@ -8,8 +8,8 @@
  * is one of these" from "the rule I have is something else", which is what decides
  * whether the custom field is open.
  *
- * Plain data, no `rrule`: this file is imported by the panel, and the parser is
- * main-process only. The panel never asks whether a rule is valid — it sends it and
+ * Plain data, no `rrule`: this file is imported by the detail window, and the parser is
+ * main-process only. The window never asks whether a rule is valid — it sends it and
  * reads back the rejection.
  */
 

@@ -129,6 +129,15 @@ async function waitForEvent(type, timeoutMs, since = 0) {
   return null;
 }
 
+/** The most recent event of `type`, whenever it happened. */
+function latestEvent(type) {
+  const events = readStatus()?.events ?? [];
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index].type === type) return events[index];
+  }
+  return null;
+}
+
 /** Waits for a predicate over the published status (used for the boot snapshot). */
 async function waitFor(predicate, timeoutMs, description) {
   const deadline = Date.now() + timeoutMs;
@@ -954,7 +963,13 @@ async function main() {
     const followSince = Date.now();
     const followDrag =
       menuTarget === null ? null : await runDrag(menuTarget, display, FOLLOW_DRAG_DIP);
-    const followed = await waitForEvent('panel-followed', 6_000, followSince);
+    const followSeed = await waitForEvent('panel-followed', 6_000, followSince);
+    // `runDrag` retries a miss, and every attempt that moved the marker reported its own
+    // follow — so the *first* report after `followSince` can belong to the attempt that
+    // was thrown away. The drag that counts is the accepted one, so let the debounce
+    // (150ms) settle and read the last report instead.
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const followed = followSeed === null ? null : latestEvent('panel-followed');
 
     if (menuTarget === null) {
       fail('the marker position is unknown, so the panel-follow drag could not be aimed');

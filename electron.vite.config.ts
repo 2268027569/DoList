@@ -85,6 +85,7 @@ export default defineConfig({
           panel: resolve(root, 'src/renderer/panel/index.html'),
           marker: resolve(root, 'src/renderer/marker/index.html'),
           reminder: resolve(root, 'src/renderer/reminder/index.html'),
+          detail: resolve(root, 'src/renderer/detail/index.html'),
         },
       },
     },

@@ -10,6 +10,7 @@ import {
   isVisibleIn,
   placePanel,
   placeReminderPopup,
+  placeTaskDetail,
   snapToWorkArea,
   toAnchor,
 } from './anchoring';
@@ -174,6 +175,72 @@ describe('placePanel', () => {
     const rect = placePanel({ x: 3700, y: 400, ...MARKER }, PANEL, secondary);
     expect(rect.x).toBeGreaterThanOrEqual(secondary.x);
     expect(rect.x + rect.width).toBeLessThanOrEqual(secondary.x + secondary.width);
+  });
+});
+
+describe('placeTaskDetail', () => {
+  /** True when two rectangles share any area — the one thing this function must avoid. */
+  function shareArea(a: Rect, b: Rect): boolean {
+    return (
+      a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+    );
+  }
+
+  it('opens on the far side of the panel, one gap away', () => {
+    const panel: Rect = { x: 0, y: 200, ...PANEL };
+    const rect = placeTaskDetail(panel, PANEL, WORK_AREA);
+    expect(rect.x).toBe(panel.x + panel.width + PANEL_GAP_PX);
+    // Aligned with the panel rather than centred on it: the two windows read as one
+    // assembly, and the detail's form is taller than the list it sits beside.
+    expect(rect.y).toBe(panel.y);
+    expect(shareArea(rect, panel)).toBe(false);
+  });
+
+  it('never covers the panel, whichever edge the panel is docked to', () => {
+    const panelAt: Record<string, Rect> = {
+      left: { x: 0, y: 200, ...PANEL },
+      right: { x: WORK_AREA.width - PANEL.width, y: 200, ...PANEL },
+      top: { x: 900, y: 0, ...PANEL },
+      bottom: { x: 900, y: WORK_AREA.height - PANEL.height, ...PANEL },
+      free: { x: 1200, y: 300, ...PANEL },
+    };
+    for (const [edge, panel] of Object.entries(panelAt)) {
+      const rect = placeTaskDetail(panel, PANEL, WORK_AREA);
+      expect(shareArea(rect, panel), `${edge} panel was covered`).toBe(false);
+      // And it stays on screen, which is the other half of the guarantee.
+      expect(rect.x, `${edge} left`).toBeGreaterThanOrEqual(WORK_AREA.x);
+      expect(rect.y, `${edge} top`).toBeGreaterThanOrEqual(WORK_AREA.y);
+      expect(rect.x + rect.width, `${edge} right`).toBeLessThanOrEqual(WORK_AREA.width);
+      expect(rect.y + rect.height, `${edge} bottom`).toBeLessThanOrEqual(WORK_AREA.height);
+    }
+  });
+
+  it('flips to the panel\u2019s other side when the axis it opened along is full', () => {
+    // A tall panel at the top of a 1040px display: the two stacked would need 1460px,
+    // so the detail goes beside it instead of being clamped back over it.
+    const panel: Rect = { x: 900, y: 0, width: 640, height: 900 };
+    const size = { width: 640, height: 560 };
+    const rect = placeTaskDetail(panel, size, WORK_AREA);
+    expect(shareArea(rect, panel)).toBe(false);
+    expect(rect.x + rect.width).toBeLessThanOrEqual(panel.x);
+    expect(rect.x + rect.width).toBe(panel.x - PANEL_GAP_PX);
+  });
+
+  it('gives up on the flip and returns the preferred spot when neither side fits', () => {
+    // A display exactly the panel's width, so there is no side to flip to; the
+    // preferred rectangle (the one it would have opened at) is better than nothing.
+    const narrow: Rect = { x: 0, y: 0, width: 1000, height: 800 };
+    const panel: Rect = { x: 0, y: 0, width: 1000, height: 560 };
+    const size = { width: 1000, height: 560 };
+    expect(placeTaskDetail(panel, size, narrow)).toEqual(placePanel(panel, size, narrow));
+  });
+
+  it('keeps a non-zero display origin', () => {
+    const secondary: Rect = { x: 1920, y: 100, width: 1920, height: 1040 };
+    const panel: Rect = { x: secondary.x, y: secondary.y + 200, ...PANEL };
+    const rect = placeTaskDetail(panel, PANEL, secondary);
+    expect(rect.x).toBe(panel.x + panel.width + PANEL_GAP_PX);
+    expect(rect.y).toBeGreaterThanOrEqual(secondary.y);
   });
 });
 

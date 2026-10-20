@@ -97,6 +97,16 @@ const api = {
     /** An image's preview as a data URL, or `null` when it has none (M03 S3). */
     thumbnail: (id: string) => invoke<string | null>(IPC.attachment.thumbnail, { id }),
   },
+  detail: {
+    /**
+     * Opens the task detail window on one task (M02 D6). The window is the main
+     * process's to create and place, so the renderer only names the task; the row the
+     * panel is showing does not move, which is the point of the separate window.
+     */
+    open: (taskId: string) => invoke<null>(IPC.detail.open, { taskId }),
+    /** Puts the detail window away — its close button, or Escape. */
+    close: () => invoke<null>(IPC.detail.close),
+  },
   reminder: {
     /**
      * The user answered the reminder popup without ticking the task off (M04). The

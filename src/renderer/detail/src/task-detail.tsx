@@ -22,7 +22,7 @@ import {
 } from '@shared/utils/reminder';
 
 import { REPEAT_PRESETS, presetFor } from './repeat-presets';
-import { usePanelStore } from './store';
+import { useDetailStore } from './store';
 
 /** Priority 0 reads as "none" here; the list row draws nothing for it. */
 const PRIORITY_LABEL: Record<TaskPriority, string> = {
@@ -99,54 +99,50 @@ const INPUT =
   'w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-muted)] px-2.5 py-1.5 text-[13px] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]';
 
 /**
- * The task detail, a full-screen replacement of the list (M02 D6): the panel is
- * 320–640 DIP wide, where a list beside anything readable is no longer readable.
+ * The task detail form (M02 D6).
  *
- * It is laid out as a column of bordered cards, one per field, inside a single
- * scroller whose scrollbar is hidden (`.detail-scroll`): a form this long has to be
- * scrollable, and the OS's bright track through a dark card is the one thing the
- * screen cannot be seen past. The wheel still works, and every control is reachable
- * from the keyboard — which is also how the smoke harness reaches them.
+ * It is a window of its own, opened beside the panel rather than inside it: the panel is
+ * 320–640 DIP wide, where a list beside anything readable is no longer readable — and the
+ * list is where the next task is picked, so a form that displaces it turns every
+ * comparison into a trip out and back. The window is framed by the entry (app.tsx); this
+ * is only the form.
  *
- * Saving is immediate (M02 D9) — there is no save button and no dirty flag, which
- * is also what makes the panel's collapse-on-blur safe: whatever was typed is
- * stored before the user leaves. Free text and the two date controls commit when
- * the field is left (or on Enter); a switch commits as it is thrown.
+ * It is laid out as a column of bordered cards, one per field, inside a single scroller
+ * whose scrollbar is hidden (`.detail-scroll`): a form this long has to be scrollable, and
+ * the OS's bright track through a dark card is the one thing the screen cannot be seen
+ * past. The wheel still works, and every control is reachable from the keyboard — which is
+ * also how the smoke harness reaches them.
  *
- * Every control carries a `data-field` name. They are what the smoke harness reads
- * to find out where the keyboard went (§13): it attaches to this page over the
- * DevTools protocol and puts the keyboard on a control **by name**, rather than
- * counting Tab presses — which never worked, because Chromium only honours focus
- * navigation while the window really holds the foreground. New controls get a name
- * too, or the harness cannot ask for them.
+ * Saving is immediate (M02 D9) — there is no save button and no dirty flag. Free text and
+ * the two date controls commit when the field is left (or on Enter); a switch commits as
+ * it is thrown. Leaving is therefore free: whatever was typed is already stored.
+ *
+ * Every control carries a `data-field` name. They are what the smoke harness reads to
+ * find out where the keyboard went (§13): it attaches to this page over the DevTools
+ * protocol and puts the keyboard on a control **by name**, rather than counting Tab
+ * presses — which never worked, because Chromium only honours focus navigation while the
+ * window really holds the foreground. New controls get a name too, or the harness cannot
+ * ask for them.
  */
-export function TaskDetail({
-  task,
-  onBack,
-}: {
-  task: TaskWithTags;
-  onBack: () => void;
-}): ReactElement {
+export function TaskDetail({ task }: { task: TaskWithTags }): ReactElement {
   const { t } = useTranslation('tasks');
-  const saveOpenTask = usePanelStore((state) => state.saveOpenTask);
-  const deleteOpenTask = usePanelStore((state) => state.deleteOpenTask);
-  const saveFailed = usePanelStore((state) => state.saveFailed);
-  const subtasks = usePanelStore((state) => state.subtasks);
-  const addSubtask = usePanelStore((state) => state.addSubtask);
-  const removeSubtask = usePanelStore((state) => state.removeSubtask);
-  const attachments = usePanelStore((state) => state.attachments);
-  const thumbnails = usePanelStore((state) => state.thumbnails);
-  const pickAttachments = usePanelStore((state) => state.pickAttachments);
-  const removeAttachment = usePanelStore((state) => state.removeAttachment);
-  const openAttachment = usePanelStore((state) => state.openAttachment);
-  const toggleTask = usePanelStore((state) => state.toggleTask);
+  const save = useDetailStore((state) => state.save);
+  const remove = useDetailStore((state) => state.remove);
+  const saveFailed = useDetailStore((state) => state.saveFailed);
+  const subtasks = useDetailStore((state) => state.subtasks);
+  const addSubtask = useDetailStore((state) => state.addSubtask);
+  const removeSubtask = useDetailStore((state) => state.removeSubtask);
+  const attachments = useDetailStore((state) => state.attachments);
+  const thumbnails = useDetailStore((state) => state.thumbnails);
+  const pickAttachments = useDetailStore((state) => state.pickAttachments);
+  const removeAttachment = useDetailStore((state) => state.removeAttachment);
+  const openAttachment = useDetailStore((state) => state.openAttachment);
 
   /**
-   * Seeded from the row once rather than kept in step with every re-read: a
-   * refresh landing mid-word would replace what the user is typing. The row
-   * itself is re-read after each write, so what is shown as saved is current.
-   * Only the free-text fields and the date controls need this — the switches
-   * below render the row directly.
+   * Seeded from the row once rather than kept in step with every re-read: a refresh
+   * landing mid-word would replace what the user is typing. The row itself is re-read
+   * after each write, so what is shown as saved is current. Only the free-text fields
+   * and the date controls need this — the switches below render the row directly.
    */
   const [title, setTitle] = useState(task.title);
   const [notes, setNotes] = useState(task.notes ?? '');
@@ -175,7 +171,7 @@ export function TaskDetail({
   const [opened] = useState(() => ({ id: task.id, title: task.title }));
 
   /**
-   * Images draw as preview cards and everything else as file rows (S3). Split from
+   * Images draw as preview cards and everything else as file rows (M03 S3). Split from
    * the one list rather than asked of the main process twice: the rule is the shared
    * `isImageName`, the same one that decides which rows are worth a thumbnail.
    */
@@ -183,27 +179,24 @@ export function TaskDetail({
   const fileAttachments = attachments.filter((row) => !isImageName(row.name ?? row.path));
 
   useEffect(() => {
-    // The harness cannot click, so this is the one moment it needs to know the
-    // detail opened on the expected row with the caret already in its title.
+    // The harness cannot click, so this is the one moment it needs to know the detail
+    // opened on the expected row with the caret already in its title.
     void window.api.smoke.report('detail-opened', {
       taskId: opened.id,
       title: opened.title,
       focused: document.activeElement === titleField.current,
     });
-    return () => {
-      void window.api.smoke.report('detail-closed', { taskId: opened.id });
-    };
   }, [opened]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key !== 'Escape') return;
       event.preventDefault();
-      onBack();
+      close();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [onBack]);
+  }, []);
 
   /** A blank title is not a task; the field falls back to what the row holds. */
   const commitTitle = (): void => {
@@ -212,19 +205,19 @@ export function TaskDetail({
       setTitle(task.title);
       return;
     }
-    void saveOpenTask({ title: next });
+    void save({ title: next });
   };
 
   const commitNotes = (): void => {
     const next = notes.trim() === '' ? null : notes;
     if (next === (task.notes ?? null)) return;
-    void saveOpenTask({ notes: next });
+    void save({ notes: next });
   };
 
   const commitDue = (date = dueDate, time = dueTime, includeTime = hasTime): void => {
     const next = fromDueValues(date, time, includeTime);
     if (next === task.dueAt && includeTime === task.dueHasTime) return;
-    void saveOpenTask({ dueAt: next, dueHasTime: includeTime });
+    void save({ dueAt: next, dueHasTime: includeTime });
   };
 
   /** A preset is a day, not an instant, so it drops any clock time with it. */
@@ -232,14 +225,14 @@ export function TaskDetail({
     setDueDate(toDateValue(dayStart));
     setDueTime(toTimeValue(dayStart));
     setHasTime(false);
-    void saveOpenTask({ dueAt: dayStart, dueHasTime: false });
+    void save({ dueAt: dayStart, dueHasTime: false });
   };
 
   const clearDue = (): void => {
     setDueDate('');
     setDueTime('');
     setHasTime(false);
-    void saveOpenTask({ dueAt: null, dueHasTime: false });
+    void save({ dueAt: null, dueHasTime: false });
   };
 
   const toggleHasTime = (includeTime: boolean): void => {
@@ -247,12 +240,12 @@ export function TaskDetail({
     const day = fromDueValues(dueDate, dueTime, includeTime);
     // No date yet: the switch was the whole change, and it waits on the date.
     if (day === null) {
-      void saveOpenTask({ dueHasTime: includeTime });
+      void save({ dueHasTime: includeTime });
       return;
     }
     const at = withDueTime(day, includeTime);
     setDueTime(toTimeValue(at));
-    void saveOpenTask({ dueAt: at, dueHasTime: includeTime });
+    void save({ dueAt: at, dueHasTime: includeTime });
   };
 
   const commitRemind = (): void => {
@@ -263,7 +256,7 @@ export function TaskDetail({
       return;
     }
     if (next === task.remindLeadMin) return;
-    void saveOpenTask({ remindLeadMin: next });
+    void save({ remindLeadMin: next });
   };
 
   /**
@@ -275,18 +268,18 @@ export function TaskDetail({
    */
   const chooseRemind = (minutes: number | null): void => {
     setRemind(minutes === null ? '' : String(minutes));
-    void saveOpenTask({ remindLeadMin: minutes });
+    void save({ remindLeadMin: minutes });
   };
 
   const addTag = (): void => {
     const name = tagDraft.trim();
     setTagDraft('');
     if (name === '' || task.tags.includes(name)) return;
-    void saveOpenTask({ tags: [...task.tags, name] });
+    void save({ tags: [...task.tags, name] });
   };
 
   const removeTag = (name: string): void => {
-    void saveOpenTask({ tags: task.tags.filter((tag) => tag !== name) });
+    void save({ tags: task.tags.filter((tag) => tag !== name) });
   };
 
   /**
@@ -297,7 +290,7 @@ export function TaskDetail({
   const choosePreset = (rule: string): void => {
     setRepeatOpen(false);
     setCustomRepeat('');
-    void saveOpenTask({ repeatRule: task.repeatRule === rule ? null : rule });
+    void save({ repeatRule: task.repeatRule === rule ? null : rule });
   };
 
   /**
@@ -309,7 +302,7 @@ export function TaskDetail({
   const commitCustomRepeat = (): void => {
     const rule = customRepeat.trim();
     if (rule === '' && task.repeatRule === null) return;
-    void saveOpenTask({ repeatRule: rule === '' ? null : rule });
+    void save({ repeatRule: rule === '' ? null : rule });
   };
 
   const addSubtaskFromDraft = (): void => {
@@ -332,18 +325,19 @@ export function TaskDetail({
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/*
-       * Outside the scroller, so going back is always one click away however far down
-       * the form the user has read.
+       * Outside the scroller, so closing is always one click away however far down the
+       * form the user has read. Closing puts the window away and leaves the list exactly
+       * as it was — the list was never covered.
        */}
       <header className="flex shrink-0 items-center gap-2 pb-2.5">
         <button
           type="button"
-          onClick={onBack}
-          aria-label={t('detail.back')}
+          onClick={close}
+          aria-label={t('detail.close')}
           data-field="detail-back"
           className="grid size-6 shrink-0 place-items-center rounded-lg text-[13px] text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface-muted)] hover:text-[var(--text-primary)]"
         >
-          ←
+          ×
         </button>
         <h1 className="truncate text-[13px] font-semibold tracking-tight text-[var(--text-primary)]">
           {t('detail.heading')}
@@ -493,7 +487,7 @@ export function TaskDetail({
                   key={mode}
                   field={`detail-repeat-mode-${mode}`}
                   active={(task.repeatMode ?? 'fixed') === mode}
-                  onClick={() => void saveOpenTask({ repeatMode: mode })}
+                  onClick={() => void save({ repeatMode: mode })}
                 >
                   {t(REPEAT_MODE_LABEL[mode])}
                 </Choice>
@@ -557,7 +551,7 @@ export function TaskDetail({
                 field={`detail-priority-${PRIORITY_FIELD[level]}`}
                 active={task.priority === level}
                 dot={PRIORITY_DOT[level]}
-                onClick={() => void saveOpenTask({ priority: level })}
+                onClick={() => void save({ priority: level })}
               >
                 {t(PRIORITY_LABEL[level])}
               </Choice>
@@ -573,7 +567,7 @@ export function TaskDetail({
                 field={`detail-status-${value}`}
                 active={task.status === value}
                 dot={STATUS_DOT[value]}
-                onClick={() => void saveOpenTask({ status: value })}
+                onClick={() => void save({ status: value })}
               >
                 {t(STATUS_LABEL[value])}
               </Choice>
@@ -638,7 +632,7 @@ export function TaskDetail({
                       aria-label={t(done ? 'row.markUndone' : 'row.markDone')}
                       data-field="detail-subtask-toggle"
                       data-task-id={subtask.id}
-                      onClick={() => void toggleTask(subtask.id, !done)}
+                      onClick={() => void toggleSubtask(subtask.id, !done)}
                       className={`size-4 shrink-0 rounded-full border transition-colors ${
                         done
                           ? 'border-[var(--status-done)] bg-[var(--status-done)]'
@@ -672,7 +666,7 @@ export function TaskDetail({
           {/*
            * Below the list rather than above it: adding one does not push the field
            * the caret is in down the screen, so a run of them can be typed without
-           * the panel scrolling under the user.
+           * the form scrolling under the user.
            */}
           <input
             ref={subtaskField}
@@ -696,7 +690,7 @@ export function TaskDetail({
            * An image gets a card wide enough to recognise what it is, because that is
            * the whole of what a preview is for; the row keeps its name for anything
            * else, where a thumbnail would say nothing the name does not. Both open the
-           * same way — a click, and the OS shows the copy (S7).
+           * same way — a click, and the OS shows the copy (M03 S3).
            */}
           {imageAttachments.length > 0 && (
             <div className="grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-1.5">
@@ -740,7 +734,7 @@ export function TaskDetail({
                     data-attachment-id={attachment.id}
                     // The row and the copy go; the file the user picked does not. The
                     // service refuses to unlink anything outside the app's own
-                    // attachments directory (S3).
+                    // attachments directory (M03 S3).
                     onClick={() => void removeAttachment(attachment.id)}
                     className="absolute right-0.5 top-0.5 grid size-5 place-items-center rounded-full bg-[var(--bg-surface)] text-[13px] leading-none text-[var(--text-muted)] transition-colors hover:text-[var(--status-overdue)]"
                   >
@@ -804,7 +798,7 @@ export function TaskDetail({
           {/*
            * A button rather than a drop zone: the file is chosen in the OS picker the
            * main process opens, so there is no path for a page to hand over and no
-           * need for the panel to know which files it is allowed to read (S7).
+           * need for this window to know which files it is allowed to read (M03 S3).
            */}
           <button
             type="button"
@@ -819,14 +813,14 @@ export function TaskDetail({
         </Field>
 
         {/*
-         * Deletion is a soft delete, so the row still exists and M02 S7's undo can
-         * bring it back; there is no confirm dialog to interrupt with, which is
-         * what the panel's "no modal" shape would otherwise have to host.
+         * Deletion is a soft delete, so the row still exists and the list's undo can
+         * bring it back; there is no confirm dialog to interrupt with. The window closes
+         * with it — there is nothing left to edit.
          */}
         <button
           type="button"
           data-field="detail-delete"
-          onClick={() => void deleteOpenTask()}
+          onClick={() => void remove()}
           className="self-start rounded-lg border border-[var(--border-default)] px-2.5 py-1.5 text-[11px] text-[var(--status-overdue)] transition-colors hover:border-[var(--status-overdue)] hover:bg-[var(--bg-surface-muted)]"
         >
           {t('detail.delete')}
@@ -834,6 +828,16 @@ export function TaskDetail({
       </div>
     </div>
   );
+}
+
+/** Puts this window away; the list behind it was never covered. */
+function close(): void {
+  void window.api.detail.close();
+}
+
+/** Ticks one of the checklist's rows, and reads back through the announcement. */
+function toggleSubtask(id: string, done: boolean): void {
+  void window.api.task.update(id, { status: done ? 'done' : 'todo' });
 }
 
 /**

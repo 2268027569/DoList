@@ -6,13 +6,14 @@ import { bootQuery } from '@shared/utils/boot';
 import type { BootParams } from '@shared/types/app';
 
 /**
- * Three renderer entries, no router (docs/ARCHITECTURE.md §2). Boot parameters are
+ * Four renderer entries, no router (docs/ARCHITECTURE.md §2). Boot parameters are
  * passed as a query string so every entry can apply them before the first paint
  * (see `src/renderer/shared-ui/boot.ts`) — and an entry that needs more than the boot
- * parameters (the reminder popup's payload) adds it to the same string, because the
- * window may be drawn before this process could answer an IPC round trip.
+ * parameters (the reminder popup's payload, the detail window's task id) adds it to
+ * the same string, because the window may be drawn before this process could answer
+ * an IPC round trip.
  */
-export type RendererEntry = 'panel' | 'marker' | 'reminder';
+export type RendererEntry = 'panel' | 'marker' | 'reminder' | 'detail';
 
 export async function loadRenderer(
   window: BrowserWindow,

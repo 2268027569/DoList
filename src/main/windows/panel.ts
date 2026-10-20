@@ -38,12 +38,62 @@ let persistSizeTimer: NodeJS.Timeout | null = null;
 let pendingFollow: { markerBounds: Rect; panelBounds: Rect } | null = null;
 let followReportTimer: NodeJS.Timeout | null = null;
 
+/**
+ * Set while another window is using the panel as its footing and therefore holding it
+ * up (M02 D6). The detail window is opened *beside* the panel, and taking the focus is
+ * how it opens — so the blur handler below cannot be trusted alone: without this the
+ * list would be gone the moment the user asked to edit a row, which is the one thing
+ * the separate window exists to avoid.
+ *
+ * It is a flag rather than a counter because there is a single holder and it either
+ * holds or does not; releasing it re-runs the collapse decision, which is what makes
+ * "close the detail while the pointer is on the panel" behave correctly.
+ */
+let held = false;
+
+/** Listeners for "the panel left the screen", which is when a dependent window gives up. */
+const hiddenListeners = new Set<() => void>();
+
 export function getPanelWindow(): BrowserWindow | null {
   return panelWindow;
 }
 
 export function panelStateOf(): PanelState {
   return panelState;
+}
+
+/**
+ * Holds the panel open while another window of ours is taking the focus (M02 D6).
+ *
+ * Only the detail window calls this, and only for as long as it is open. Releasing the
+ * hold re-runs the collapse decision rather than leaving it to the next blur event,
+ * because the pointer can be back on the panel by then: the answer to "should this
+ * still be up?" is asked of the panel's live focus, not of who let go of it last.
+ */
+export function setPanelHeld(next: boolean): void {
+  if (held === next) return;
+  held = next;
+  if (held) cancelCollapse();
+  else scheduleCollapse();
+}
+
+/**
+ * Gives the panel the keyboard back, for when the window that borrowed it (the detail
+ * beside it) is gone.
+ *
+ * Without this the hold is released onto a blurred panel: the collapse timer asks
+ * `isFocused()` a moment later, gets no for an answer, and the list disappears the
+ * instant the user finishes editing — the opposite of what the separate window is for.
+ */
+export function focusPanel(): void {
+  const window = panelWindow;
+  if (window === null || window.isDestroyed() || !window.isVisible()) return;
+  window.focus();
+}
+
+/** Runs `listener` whenever the panel leaves the screen, whatever asked it to. */
+export function onPanelHidden(listener: () => void): void {
+  hiddenListeners.add(listener);
 }
 
 export function createPanelWindow(boot: BootParams): BrowserWindow {
@@ -309,10 +359,16 @@ function hidePanel(): void {
   setMarkerPanelVisible(false);
   log('panel hidden');
   smokeRecord('panel-hidden');
+  // Whoever was leaning on the panel has lost its footing: the detail window beside it
+  // would be editing a task with nothing to go back to, so it closes with it.
+  for (const listener of hiddenListeners) listener();
 }
 
 function scheduleCollapse(): void {
   cancelCollapse();
+  // Held: the focus that just left is another window of ours, and the panel it is
+  // working beside is meant to stay exactly where it is (M02 D6).
+  if (held) return;
   collapseTimer = setTimeout(() => {
     collapseTimer = null;
     const window = panelWindow;

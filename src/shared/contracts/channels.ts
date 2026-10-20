@@ -96,6 +96,16 @@ export const IPC = {
      */
     thumbnail: 'attachment:thumbnail',
   },
+  detail: {
+    /**
+     * Renderer -> main: open the task detail window on this task (M02 D6). The detail
+     * is a window of its own beside the panel, so "showing it" is a window command
+     * rather than a page the panel draws.
+     */
+    open: 'detail:open',
+    /** Renderer -> main: put the detail window away. */
+    close: 'detail:close',
+  },
   reminder: {
     /**
      * Renderer -> main: the user answered the reminder popup without ticking the task

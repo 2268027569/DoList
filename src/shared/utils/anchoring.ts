@@ -235,6 +235,65 @@ export function placePanel(
 }
 
 /**
+ * Places the task detail window beside the panel (docs/FEATURES.md M02 D6).
+ *
+ * The detail is a window of its own now, and it opens *next to* the panel rather than
+ * over it: the list is left visible and operable while a task is edited, so a click on
+ * another row is one gesture away instead of a trip back through a back button.
+ *
+ * It is placed by feeding the panel's own rectangle to {@link placePanel}, which opens
+ * away from whichever edge that rectangle is docked to (or, for a free one, on the
+ * side its centre leaves room on). Where that result would still land on the panel —
+ * a small display, or a panel wide enough that the clamp pulls the window back — it is
+ * flipped to the panel's other side, and if neither side fits the preferred rectangle
+ * is returned: a slightly overlapping window the user can drag is better than one off
+ * screen or one that silently refuses to open.
+ */
+export function placeTaskDetail(
+  panelBounds: Rect,
+  detailSize: { width: number; height: number },
+  workArea: Rect,
+  gap: number = PANEL_GAP_PX,
+): Rect {
+  const preferred = placePanel(panelBounds, detailSize, workArea, gap);
+  if (!overlaps(preferred, panelBounds)) return preferred;
+
+  // The flip goes along the *other* axis: the preferred spot was moved along one of
+  // them and the clamp is what pulled it back, so that one is the one with no room
+  // left. Moving along it again would only reproduce the same rectangle.
+  const movedVertically =
+    Math.abs(preferred.y - panelBounds.y) > Math.abs(preferred.x - panelBounds.x);
+  const flipped = movedVertically
+    ? {
+        ...preferred,
+        x:
+          preferred.x < panelBounds.x
+            ? panelBounds.x + panelBounds.width + gap
+            : panelBounds.x - detailSize.width - gap,
+      }
+    : {
+        ...preferred,
+        y:
+          preferred.y < panelBounds.y
+            ? panelBounds.y + panelBounds.height + gap
+            : panelBounds.y - detailSize.height - gap,
+      };
+
+  const candidate = place(flipped.x, flipped.y, detailSize, workArea);
+  return overlaps(candidate, panelBounds) ? preferred : candidate;
+}
+
+/** True when two rectangles share any area at all. Touching edges count as apart. */
+function overlaps(a: Rect, b: Rect): boolean {
+  return (
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
+}
+
+/**
  * The reminder popup's window size (docs/FEATURES.md M04).
  *
  * Fixed rather than resizable, and narrower than the panel: the popup is a notification

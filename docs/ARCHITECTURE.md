@@ -43,6 +43,8 @@ toDoList/
 │  │  ├─ windows/
 │  │  │  ├─ marker.ts              # 标记窗口：创建、拖拽、吸附、贴边隐藏
 │  │  │  ├─ panel.ts               # 面板窗口：展开/收起、失焦隐藏、定位
+│  │  │  ├─ detail.ts              # 详情窗口：开在面板旁、跟随标记、面板收起时一并关闭
+│  │  │  ├─ reminder.ts            # 提醒弹窗：每实例一扇窗、不抢焦点
 │  │  │  └─ window-state.ts        # 位置与尺寸持久化、多显示器纠偏
 │  │  ├─ ipc/
 │  │  │  ├─ register.ts            # 统一注册器：channel → handler + 校验
@@ -85,14 +87,16 @@ toDoList/
 
 **两条结构性决定**：
 
-1. **三个渲染入口**（`panel/index.html`、`marker/index.html`、`reminder/index.html`），不做单入口路由。标记页零依赖 React、零依赖 i18next，只加载约 23 kB 的 DOM + CSS + 静态文案，保证常驻内存与 CPU 最低。提醒弹窗（M04）是第三个入口，也是一个独立窗口的页面：它只在提醒无人应答时出现，不跟着面板常驻，所以单列一份而不是塞进面板里（§5.3.2）。
+1. **四个渲染入口**（`panel/index.html`、`marker/index.html`、`reminder/index.html`、`detail/index.html`），不做单入口路由。标记页零依赖 React、零依赖 i18next，只加载约 23 kB 的 DOM + CSS + 静态文案，保证常驻内存与 CPU 最低。提醒弹窗（M04）是第三个入口，也是一个独立窗口的页面：它只在提醒无人应答时出现，不跟着面板常驻，所以单列一份而不是塞进面板里（§5.3.2）。任务详情（M02 D6 改版）是第四个入口：它开在面板**旁边**而不是替换面板内容，两扇窗是两个渲染进程，因此必须各有一个页面（§9.1.2）。
 
    M0 实测产物：`marker.js 5.26 kB + marker.css 7.78 kB`（另需共享 i18n chunk 85.26 kB）、`panel.js 587.45 kB + panel.css 19.74 kB`、`main 377.85 kB`、`preload 3.36 kB`。
 
    M01 实测产物：常驻标记路径为 `marker.js 7.15 kB + marker.css 10.98 kB + common chunk 5.10 kB = 23.23 kB`（形态/角标/进度环与拖拽桥都在其中），i18next 已完全移出常驻路径，只随面板打包（`panel.js 587.45 → 673.04 kB`、`panel.css 19.74 → 21.80 kB`）；`main 384.07 kB`、`preload 3.74 kB`。ICU 打包（78.13 kB，`es-*.js`）仍由 i18next-icu 动态 import 承担，只有面板与提醒弹窗按需加载。
 
    M04 实测产物：`reminder.js 12.55 kB + reminder.css 31.41 kB`（React + 共享 UI 层 + 粒子特效），`main 513.88 kB`、`preload 10.97 kB`、`panel.js 88.34 kB + panel.css 32.13 kB`（面板此后按 chunk 拆分，`format-*.js 668.64 kB` 为共享 chunk）。
-2. **`src/shared` 只放纯函数与类型**，不 import `electron`、不 import Node 内置模块；这样吸附算法、RRULE、格式化函数可以直接被 Vitest 单测覆盖，也能被三个渲染入口共用。
+
+   M02 D6 改版实测产物：`detail.js 48.28 kB + detail.css 32.37 kB`（表单从面板搬出后的独立入口，与 `panel.js 45.86 kB` 同量级，React 与格式化仍是共享 chunk），`main 526.37 kB`、`preload 11.74 kB`。
+2. **`src/shared` 只放纯函数与类型**，不 import `electron`、不 import Node 内置模块；这样吸附算法、RRULE、格式化函数可以直接被 Vitest 单测覆盖，也能被四个渲染入口共用。
 
 ---
 
@@ -493,6 +497,8 @@ theme: { extend: { colors: {
 
 **关键取舍**：标记窗口**不能**用 `setIgnoreMouseEvents`——那是点击穿透，会让标记彻底点不到。
 
+**详情窗口（M02 D6 改版）**：除 `focusable: true`（详情要拿键盘，用户点的是「编辑」）与 `spellcheck: false` 外，与面板窗口是同一组参数——同尺寸（`clampPanelSize`，冒烟固定为 `PANEL_SIZE`）、同 `transparent`、同 `skipTaskbar`、同置顶。它不常驻：没有打开的详情时它不存在，关闭即销毁。
+
 #### 9.1.1 实测结论（M0，Windows 11 · 1920×1080 · scale 1 · Electron 44.9.0）
 
 用 `scripts/smoke-marker-input.mjs`（`npm run smoke:marker`）驱动真实系统光标，结论如下：
@@ -508,6 +514,16 @@ theme: { extend: { colors: {
 **因此窗口尺寸的处理方式**：`MARKER_ARTWORK` 只是美术尺寸；窗口尺寸走 `markerWindowSize()` = `max(美术尺寸 × 缩放, 平台下限)`，创建后回读 `getBounds()` 并按**实际**尺寸重算锚点位置，保证美术图形在窗口内居中、锚点数学始终自洽。形态/缩放变化时按新尺寸重算窗口并推送渲染层（§9.8）。
 
 **冒烟脚本的工程细节**（脚本自身踩过的坑）：拖拽判据**不能**用中途回读的光标——它被 warp 带偏，会把应用缺陷判成通过，也可能把正确的运行判成失败；正确做法是用「手的净位移 + 起始 bounds」做端到端断言。点击阶段必须瞄准**拖拽之后**的实际位置（启动快照已过期），并等 > 450ms 避开渲染层的 300ms 点击抑制；合成 `mouse_event` 的按下偶发不生效（约 1/6 次），需要有限次重试；冒烟模式下标记窗口强制从默认锚点起步，避免上一轮持久化的位置把标记推出工作区。
+
+#### 9.1.2 详情窗口：开在面板**旁边**（M02 D6 改版）
+
+- **为什么不放在面板里**：面板宽 320–640 DIP，表单和列表塞进一扇窗确实挤；但原来的答案「详情替换列表」让用户在两个任务之间对照、或改完一个接着改下一个时，每次都要按 Esc 来回切。两扇窗同时在场是唯一能同时满足「表单要宽」和「列表要一直在」的形态，代价是多一个渲染进程
+- **只有一个详情窗**：编辑是一个一个来的，两扇表单对一份列表是两个答案回答同一个问题。再点一行是**换指向**——同一扇窗用新的 `?task=` 重新加载（`loadRenderer(..., { task })`），位置不动，用户挪过的窗口不会被程序挪回去
+- **摆在面板旁边**：`shared/utils/anchoring.ts` 的 `placeTaskDetail(panelBounds, size, workArea)`。先用 `placePanel` 的风格算出首选位置（面板下沿向下的那条轴），若与面板矩形相交就翻到**另一条轴**的另一侧，两边都放不下时退回首选并按工作区夹取。纯函数，5 个单测覆盖四个停靠方向、翻面、窄屏与带偏移的显示器原点
+- **面板在详情开着时不收起**（`windows/panel.ts` 的 `setPanelHeld`）：详情是唯一会拿焦点的窗口，而面板的失焦收起会连列表一起带走。持住期间 `scheduleCollapse` 直接返回；释放时**重新问一次** `isFocused()`，因为松手那一刻指针可能已经回到面板上。关窗前先 `focusPanel()` 把键盘还给列表，再释放——否则释放后的定时器会看到一个没有焦点的面板，把列表收掉
+- **面板走了详情一起走**：`onPanelHidden` 订阅（`hidePanel` 的通知点）让详情销毁。留着一条正在编辑、却没有列表可回的表单，比关掉更糟
+- **标记拖动时跟着走**：`onMarkerMoved` 里两者都用新矩形**重新推导**位置（面板用 `placePanel`、详情用 `placeTaskDetail`），不读对方窗口的实时 bounds——两个订阅者的调用顺序不该决定结果
+- **动画纪律同 §9.1**：窗口先定尺寸与位置再 `show()`，缓入只动 `opacity` 与 `transform`（`detail.css`，220ms；`prefers-reduced-motion` 下 1ms），没有一帧改窗口尺寸
 
 ### 9.2 拖拽与点击为什么不用 `-webkit-app-region: drag`
 
