@@ -2,6 +2,7 @@ import { BrowserWindow, screen } from 'electron';
 import { join } from 'node:path';
 
 import { IPC } from '@shared/contracts/channels';
+import type { ReminderDuePayload } from '@shared/contracts/reminder';
 import { panelSizeOf } from '@shared/contracts/settings';
 import { TRANSPARENT_WINDOW_BACKGROUND } from '@shared/theme/window-background';
 import { placePanel, snapToWorkArea } from '@shared/utils/anchoring';
@@ -164,6 +165,55 @@ export function expandPanelForToday(): PanelState {
   const state = expandPanel();
   sendToPanel(IPC.event.panelView, { view: 'today' });
   return state;
+}
+
+/**
+ * A reminder notification was clicked (M04): open the panel on that task.
+ *
+ * It expands like any other open — it takes focus, because the user just clicked the
+ * app's notification and the thing they asked for is the task in front of them.
+ */
+export function expandPanelForTask(taskId: string): PanelState {
+  const state = expandPanel();
+  sendToPanel(IPC.event.taskFocus, { taskId });
+  return state;
+}
+
+/**
+ * A reminder's in-app card (M04): open the panel onto the card, **without** taking
+ * focus.
+ *
+ * The card is what speaks when the OS notification went unanswered, so the panel has
+ * to be up for it to be read — but pulling focus would take the caret out of whatever
+ * the user is typing into, which is exactly the intrusion the two-step delivery exists
+ * to avoid. It is not focused, so the blur timer that normally collapses the panel
+ * never starts either: nothing was taken, so nothing has to be given back.
+ */
+export function expandPanelForReminder(payload: ReminderDuePayload): PanelState {
+  const window = panelWindow;
+  const marker = getMarkerWindow();
+  if (window === null || window.isDestroyed() || marker === null || marker.isDestroyed()) {
+    return panelState;
+  }
+
+  cancelCollapse();
+  // Same placement path as a click, minus the `focus()` and the `moveTop()` that
+  // follow it: the rectangle comes from the marker's anchor, not its live bounds
+  // (§9.4), so a marker parked at an edge still opens the panel where it belongs.
+  const markerBounds = revealMarker('panel-expand') ?? marker.getBounds();
+  const display = screen.getDisplayNearestPoint({
+    x: markerBounds.x + markerBounds.width / 2,
+    y: markerBounds.y + markerBounds.height / 2,
+  });
+  window.setBounds(placePanel(markerBounds, currentPanelSize(window), display.workArea));
+  if (!window.isVisible()) window.show();
+
+  panelState = 'shown';
+  setMarkerPanelVisible(true);
+  sendToPanel(IPC.event.panelState, { state: 'expanding', durationMs: EXPAND_DURATION_MS });
+  sendToPanel(IPC.event.reminderDue, payload);
+  log('panel expanded for a reminder', { reminderId: payload.id, taskId: payload.taskId });
+  return panelState;
 }
 
 /**

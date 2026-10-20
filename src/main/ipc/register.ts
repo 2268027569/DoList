@@ -25,6 +25,7 @@ import { smokeRecord } from '../platform/smoke';
 import { appSettings, updateAppSettings, writeMarkerAnchor } from '../services/settings';
 import { broadcastLocale, broadcastTheme } from '../services/broadcast';
 import { attachmentChannelHandlers } from './handlers/attachment';
+import { reminderChannelHandlers } from './handlers/reminder';
 import { taskChannelHandlers } from './handlers/task';
 import { invalid } from './validate';
 import {
@@ -160,6 +161,7 @@ export function registerIpcHandlers(): void {
   // the same validation and exception guard as everything above.
   for (const { channel, run } of taskChannelHandlers()) handle(channel, run);
   for (const { channel, run } of attachmentChannelHandlers()) handle(channel, run);
+  for (const { channel, run } of reminderChannelHandlers()) handle(channel, run);
 
   log(`registered ${handlerCount} channels`);
 }

@@ -5,6 +5,7 @@ import { isSmokeEnabled, smokeRecord } from '../platform/smoke';
 import { pushMarkerState } from '../windows/marker';
 import { getPanelWindow } from '../windows/panel';
 import { currentMarkerState } from './marker-state';
+import { rescheduleReminders } from './scheduler';
 
 /**
  * The single notification point for every task write (§6.2, M02 §5).
@@ -20,6 +21,13 @@ import { currentMarkerState } from './marker-state';
  */
 export function notifyTasksChanged(change: TaskChangedPayload): void {
   pushMarkerState();
+
+  // A write is also the only thing that can move a reminder: it arms one when the due
+  // date or its lead lands in the future, and drops one when the task is finished, binned
+  // or rolled onto its next occurrence. Re-arming here — at the one place every write
+  // passes through — is what keeps the scheduler's single timer honest without the task
+  // service having to know that a scheduler exists (§5.3).
+  rescheduleReminders();
 
   // The state sent under the harness is a fixed stub — the marker's drawing path
   // has to be observable on an empty database — so the badge this write actually

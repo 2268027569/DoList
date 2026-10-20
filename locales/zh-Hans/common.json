@@ -3,5 +3,6 @@
   "action.newTask": "新建任务",
   "action.today": "今天",
   "action.quit": "退出",
+  "notify.reminderTitle": "YiChen ToDo",
   "marker.tooltip": "单击展开 · 拖动调整位置"
 }

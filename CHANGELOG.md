@@ -178,4 +178,23 @@
 - 测试：`attachments.test.ts` 重写为 7 例——复制落盘并逐字节一致、源名 / 副本路径 / 副本大小三者的关系、不可复制时跳过而非记录、一轮多文件按挑选顺序、同名文件两次挂载互不覆盖、移除时副本随之消失而源文件仍在、只删目录直属路径；单测总数 225 例
 - 冒烟：`smoke:tasks` 扩到 **76 项断言**（新增 phase 4e）。原生选择器无法被脚本点击，因此新增替身 `YICHEN_SMOKE_ATTACH`（用平台路径分隔符分隔的多个路径，主进程启动时读一次）：运行前在冒烟目录里现场生成一个**真 PNG**（自写 chunk + CRC，因为"名字像图片"的文件过不了平台解码器）与一个 txt → 断言两行都画出来**且只有图片拿到预览** → 断言副本落在 profile 的 `attachments/` 下且与源文件逐字节一致、行的名字是源名、大小是副本大小 → 从页面上读卡片自己的 `src` 断言是 PNG data URL → 断言开启控件指向的是副本路径 → 移除图片后断言行与副本同时消失、源文件仍在、剩下的 txt 画成文件行
 
+### M04 提醒与通知（P0 切片，2026-10-20）
+
+- 提醒此前**一行代码都没有**：详情页的「提前提醒」只写 `tasks.remind_lead_min`，`reminders` 表建了却从没有写过，`src/` 里也没有任何 `new Notification`。P0 切片把它接通，交付形态是**「两者都要」**
+- `reminders` 表终于有了消费者：它存的是**生成的实例**，不是用户的意图——意图是任务行上的 `remind_lead_min`，实例是 `fire_at = due_at - lead`（`shared/utils/reminder.ts` 的 `fireAtFor`）。两边任一为空就没有实例：提醒是**相对截止时间**定义的，没有截止就没有可回数的时刻，**不补一个默认时间**
+- 写入即重算：`services/tasks.ts` 的 `syncReminder` 每次写任务时替换该任务的**等待**实例（只碰 `pending` 行，已触发过的是"说过什么"的流水，不得改写）；已完成 / 已取消 / 在回收站的任务没有等待实例；`deleteTasks` 在同一次写入里清掉被墓碑的那批任务（含级联子任务）的等待实例；撤销一个新建走同一条路径。重复任务每展开一次就生成独立实例，因此新 occurrence 自带自己的提醒
+- **刚落库的实例必须仍在未来**：`fire_at <= now` 不落库。提醒的意义是在截止**之前**开口，武装一个刚路过的时刻等于设完就立刻宣布逾期
+- `services/scheduler.ts` 按文档形态落地：**单一时间源、非轮询**——读出最近的 `fire_at`，排**一个** `setTimeout`，触发后重排。一个三天后才响的提醒让应用可以真的闲着，这正是标记窗口能是 23 kB DOM 页的前提。`setTimeout` 的毫秒数是 32 位有符号，超过约 24.8 天会溢出成立即触发，所以单次等待被切成 `MAX_TIMER_MS` 的片段
+- **它不 import electron**：交付意味着一条系统通知和一张内置卡片，但调度器只知道**实例**与它对应的任务，`deliver` 是启动时注入的回调。时钟（`now`）与定时器（`arm`）也都能注入，所以时序规则可以对着一份真库、一只手工拨动的时钟单测，**断言算术与事件顺序，而不是机器跑了多久**
+- **数据库就是记忆**：已交付的实例移到 `fired` 并留在那里（在 OS 被要求画任何东西**之前**就写下去），重启不会重播。开机时把 `fire_at < now - 6h` 的 `pending` 行置为 `dismissed` 而不是补发：晚几小时说还有意义，晚几天说没有——任务本身已显示逾期，一串关于上周的通知只会训练用户忽略全部提醒
+- 再排一次的时机是 `services/task-events.ts` 的 `notifyTasksChanged`——每一次写入的唯一必经点。调度器因此不必被任务服务知道，而一次写入既能武装也能取消，`MIN(fire_at)` 一处覆盖两种
+- **两段式交付与去重**（`platform/notifications.ts`）：① 系统原生通知（Windows toast / macOS 通知中心），点击即应答并把面板打开到那个任务；② 数分钟后仍无人应答，再浮出**应用内置置顶卡片**（`renderer/panel/src/reminder-card.tsx`，带「完成 / 知道了」，前者就是列表勾选那一次写入）。**两者绝不同时说话**——一个提醒是一个实例一行数据，那行就是全部协调：点击 toast 把实例置为 `dismissed`，卡片定时器开卡前重读该行、发现它不是 `fired` 就什么都不做；反向亦同，应答卡片时顺带关掉仍在的 toast（Windows 上横幅不点会一直留着，留着就是对一件刚处理过的事做第二次播报）。`Notification.isSupported()` 为假的平台上卡片仍按同一只定时器到达，而不是被跳过；交付时任务行已不在（在别处被删）则实例直接置为 `dismissed`——没有名字可叫的播报比沉默更糟
+- **卡片不抢焦点**：`expandPanelForReminder` 与点击展开走同一条摆放路径（锚点矩形，`ARCHITECTURE §9.4`），但省掉 `focus()` / `moveTop()`。卡片正是用来兜底一个没人应答的通知，把光标从用户正在打字的地方夺走就是两段式想避免的那种打扰；不抢焦点也意味着正常的失焦收起定时器不会启动——没拿走什么，就不必还回去
+- **提前提醒档位**：5 / 10 / 30 分钟、1 小时、1 天（`REMIND_LEAD_PRESETS`）画成 chip，按 `leadBucketOf` 说"分钟 / 小时 / 天"，不会把 1440 端给用户看；原来的数字输入框保留在 chip 下方并补了单位，`data-field="detail-remind"` 未改动。点已选中的 chip 即清除，与重复规则的档位同一手势
+- IPC（`ARCHITECTURE §6.4`）：提醒域只有 **`reminder:dismiss` 一个渲染层→主进程通道**（schema `reminderDismissInput`），其余全是主进程→面板的事件——`event:reminder-due`（卡片到期，载荷 `ReminderDuePayload`：instance id / taskId / title / dueAt）与 `event:task-focus`（toast 被点击要打开的任务）。渲染层既不查询也不排期提醒：主进程说什么时候到，渲染层只负责画出来，以及回答"用户看过了"——这是主进程无法自己观测的**唯一**一件事
+- i18n：新增 `detail.remindMinutes / remindHours / remindDays / remindUnit`、`reminder.title / due / done / dismiss`（`tasks`）与 `notify.reminderTitle`（`common`），`en` 与 `zh-Hans` 同步；不是做成"每个档位一句文案"，而是每个**量级**一句、数字由 `{n}` 填
+- 测试：单测 225 → **265 例**。新增 `shared/utils/reminder.test.ts`（`fireAtFor` 从截止往回数、两侧任一为空即为 `null`、提前量为 0 落在截止当刻；档位升序；`leadBucketOf` 的分桶）、`repositories/reminders.test.ts`（只有未来才武装、替换而非堆叠、`null` 清除、已触发的不被改写、`MIN(fire_at)` 跨任务取最早、`dueBy` 的边界含当刻与排序、批量清除、状态流转、`dismissPendingBefore` 的 cutoff）、`services/scheduler.test.ts`（**手工时钟 + 手工定时器**：三个提醒只排一个定时器且指向最早的、无提前量不排、到点交付并自动重排到下一个、每个实例只交付一次、一次交付全部到点且按时间序、写入移动时刻后重排到新时刻、清掉最后一个提醒后不再排、停机后不再交付、逾期超 6 小时不交付且被标 `dismissed`、删除后到点不交付）
+- 冒烟：`smoke:tasks` 76 → **86 项**（新增 phase 12）。提醒是**在截止之前**武装的，所以脚本没法坐着等那一刻到来——新增替身 `YICHEN_SMOKE_REMIND_OFFSET_MS` 把调度器的时钟推快三天（时序算术不变，delay 仍是 `fire_at - now`，只是它已经为 0），同时把兜底卡片的定时器在冒烟下缩到 1.5 秒。phase 12 断言行集合与状态：无截止的任务**不武装** → 用日期控件把截止改到后天（`setDateField` 走 input 自身的 prototype setter，否则 React 看不见变化）→ 有截止无提前量仍**不武装** → 点 30 分钟 chip 武装**恰好一个**实例且 `fire_at` 等于后天零点减 30 分钟 → 断言实例落成 `fired` → 断言卡片**真的画在 DOM 上**（读 `[data-field="reminder-card"]` 的 `data-task-id` / `data-reminder-id`）且卡片上有任务名 → 按「知道了」后断言行成 `dismissed`、卡片从 DOM 消失 → 整轮状态文件里该实例只被播报过一次、只被应答过一次（去重是**量出来的**，不是假定的）
+- 文档同步：[ARCHITECTURE.md](docs/ARCHITECTURE.md) §5.3 从"为什么需要这张表"扩成实际落地的纪律，并新增 §5.3.1（调度器形态与可单测性）、§5.3.2（两段式交付与去重）、§6.4 补提醒通道；[FEATURES.md](docs/FEATURES.md) M04 补进度与「内置兜底卡片」一行
+
 [Unreleased]: https://github.com/2268027569/DoList/commits/main

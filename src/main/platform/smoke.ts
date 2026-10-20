@@ -55,6 +55,21 @@ export function smokeMarkerBounds(): Rect | null {
   return typeof bounds === 'object' && bounds !== null ? (bounds as Rect) : null;
 }
 
+/**
+ * How far ahead of the wall clock the reminder harness runs (M04).
+ *
+ * A reminder is armed *before* its deadline, so a run that wanted to watch one arrive
+ * would have to sit and wait for it. Moving the scheduler's clock forward instead
+ * keeps the arithmetic under test intact — the delay is still `fire_at - now` — while
+ * making the moment the run is waiting for already be here. Zero when the harness has
+ * not asked for an offset.
+ */
+export function smokeClockOffsetMs(): number {
+  if (!isSmokeEnabled()) return 0;
+  const raw = Number(process.env['YICHEN_SMOKE_REMIND_OFFSET_MS']);
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
 function flush(): void {
   if (!isSmokeEnabled()) return;
   const payload = {

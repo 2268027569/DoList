@@ -14,6 +14,12 @@ import {
   withDueTime,
 } from '@shared/utils/task-dates';
 import { progressText } from '@shared/utils/task-tree';
+import {
+  MINUTES_PER_DAY,
+  MINUTES_PER_HOUR,
+  REMIND_LEAD_PRESETS,
+  leadBucketOf,
+} from '@shared/utils/reminder';
 
 import { REPEAT_PRESETS, presetFor } from './repeat-presets';
 import { usePanelStore } from './store';
@@ -46,6 +52,28 @@ const PRIORITY_DOT: Record<TaskPriority, string> = {
   2: 'bg-[var(--priority-medium)]',
   3: 'bg-[var(--priority-high)]',
 };
+
+/**
+ * The wording a reminder preset answers to. One key per bucket rather than one per
+ * preset, so 5 and 30 minutes are the same sentence with a different number in it —
+ * and the number shown is never the stored one, which would read "1440" for a day.
+ */
+const REMIND_BUCKET_KEY = {
+  minutes: 'detail.remindMinutes',
+  hours: 'detail.remindHours',
+  days: 'detail.remindDays',
+} as const;
+
+/**
+ * A lead in the unit it is spoken in: 120 minutes is "2 hours", 1440 is "1 day". The
+ * stored value stays minutes — that is what the column holds and what `fireAtFor` does
+ * its arithmetic on — so this is a display concern only and never reaches the database.
+ */
+function displayLead(leadMin: number): number {
+  if (leadMin >= MINUTES_PER_DAY) return leadMin / MINUTES_PER_DAY;
+  if (leadMin >= MINUTES_PER_HOUR) return leadMin / MINUTES_PER_HOUR;
+  return leadMin;
+}
 
 const STATUS_LABEL: Record<TaskStatus, string> = {
   todo: 'status.todo',
@@ -236,6 +264,18 @@ export function TaskDetail({
     }
     if (next === task.remindLeadMin) return;
     void saveOpenTask({ remindLeadMin: next });
+  };
+
+  /**
+   * Takes one of the preset leads, or clears it when it was already the active one.
+   *
+   * The number field is moved along with it: it is seeded once from the row and would
+   * otherwise keep showing the lead the user just replaced, making the two controls
+   * disagree about the one value they both write.
+   */
+  const chooseRemind = (minutes: number | null): void => {
+    setRemind(minutes === null ? '' : String(minutes));
+    void saveOpenTask({ remindLeadMin: minutes });
   };
 
   const addTag = (): void => {
@@ -463,22 +503,50 @@ export function TaskDetail({
         </Field>
 
         <Field label={t('detail.remind')}>
-          <input
-            type="number"
-            min={0}
-            inputMode="numeric"
-            value={remind}
-            placeholder={t('detail.none')}
-            data-field="detail-remind"
-            onChange={(event) => setRemind(event.target.value)}
-            onBlur={commitRemind}
-            onKeyDown={(event) => {
-              if (event.key !== 'Enter') return;
-              event.preventDefault();
-              commitRemind();
-            }}
-            className={INPUT}
-          />
+          {/*
+           * The five preset leads sit above the custom field rather than replacing it
+           * (M04): the chip is what the user reaches for nine times out of ten, and the
+           * number stays for the tenth. A chip that is already the active one clears it,
+           * which is the same gesture the repeat presets use.
+           */}
+          <div className="mb-1.5 flex flex-wrap gap-1.5">
+            {REMIND_LEAD_PRESETS.map((minutes) => (
+              <Choice
+                key={minutes}
+                field={`detail-remind-${minutes}`}
+                active={task.remindLeadMin === minutes}
+                onClick={() => chooseRemind(task.remindLeadMin === minutes ? null : minutes)}
+              >
+                {t(REMIND_BUCKET_KEY[leadBucketOf(minutes)], { n: displayLead(minutes) })}
+              </Choice>
+            ))}
+          </div>
+          {/*
+           * The custom lead stays a plain minutes field, with the unit spelled out: the
+           * presets above cover the round values, and a number without a unit next to an
+           * input that once said "（分钟）" is not something a reader should have to guess.
+           */}
+          <div className="flex items-center gap-1.5">
+            <input
+              type="number"
+              min={0}
+              inputMode="numeric"
+              value={remind}
+              placeholder={t('detail.none')}
+              data-field="detail-remind"
+              onChange={(event) => setRemind(event.target.value)}
+              onBlur={commitRemind}
+              onKeyDown={(event) => {
+                if (event.key !== 'Enter') return;
+                event.preventDefault();
+                commitRemind();
+              }}
+              className={INPUT}
+            />
+            <span className="shrink-0 text-[11px] text-[var(--text-muted)]">
+              {t('detail.remindUnit')}
+            </span>
+          </div>
         </Field>
 
         <Field label={t('detail.priority')}>

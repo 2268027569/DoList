@@ -13,6 +13,8 @@ import type {
   TaskWithTags,
 } from '@shared/types/task';
 import { nextOccurrence } from '@shared/utils/recurrence';
+import { fireAtFor } from '@shared/utils/reminder';
+import { clearPendingReminders, replacePendingReminder } from '../db/repositories/reminders';
 import { tagsOfTasks } from '../db/repositories/tags';
 import {
   createTask,
@@ -87,6 +89,7 @@ export function createTaskFromInput(
   // The contract and `TaskDraft` carry the same fields, so the parsed input is
   // the draft: a second mapping step would only be a place to forget a field.
   const task = createTask(input, now);
+  syncReminder(task, now);
   // Undoing a create takes the row away again, so the entry records no `before`.
   pushUndo({ rows: [{ id: task.id, before: null, tags: null }] });
   return { task: withTags(task), change: { kind: 'created', ids: [task.id] } };
@@ -146,16 +149,24 @@ export function bulkTasks(input: TaskBulkInput, now: number = Date.now()): TaskW
 /** Soft-deletes the ids, plus the subtasks that go down with them. */
 export function deleteTasks(ids: readonly string[], now: number = Date.now()): TaskWriteResult {
   const { affected, tombstoned } = softDelete(ids, now);
-  if (affected > 0) pushUndo({ rows: undoRowsFor(tombstoned) });
+  if (affected > 0) {
+    // A task in the recycle bin must not be announced, so its waiting instance goes
+    // with it — the subtasks too, since the cascade tombstoned them as well.
+    clearPendingReminders(tombstoned.map((row) => row.id));
+    pushUndo({ rows: undoRowsFor(tombstoned) });
+  }
   return { affected, change: { kind: 'deleted', ids: unique(ids) } };
 }
 
 /** Takes the ids back out of the recycle bin. */
 export function restoreTasks(ids: readonly string[], now: number = Date.now()): TaskWriteResult {
   const { affected, restored } = restore(ids, now);
-  // The rows come back as they were in the bin, tombstone included, so undoing a
-  // restore puts them back there (and takes their subtasks along).
-  if (affected > 0) pushUndo({ rows: undoRowsFor(restored) });
+  if (affected > 0) {
+    // The rows come back carrying the tombstone they had in the bin, so they are
+    // read as live here — they are, as of this write.
+    for (const row of restored) syncReminder({ ...row, deletedAt: null }, now);
+    pushUndo({ rows: undoRowsFor(restored) });
+  }
   return { affected, change: { kind: 'restored', ids: unique(ids) } };
 }
 
@@ -192,8 +203,15 @@ export function undoLastWrite(now: number = Date.now()): TaskChangedPayload | nu
 
   const ids: string[] = [];
   for (const row of entry.rows) {
-    if (row.before === null) softDelete([row.id], now);
-    else restoreTask(row.before, row.tags, now);
+    if (row.before === null) {
+      softDelete([row.id], now);
+      clearPendingReminders([row.id]);
+    } else {
+      restoreTask(row.before, row.tags, now);
+      // The snapshot may be a tombstoned row (when undoing a restore): it is live
+      // again now, which is what its reminder is derived from.
+      syncReminder({ ...row.before, deletedAt: null }, now);
+    }
     ids.push(row.id);
   }
   return { kind: 'undone', ids };
@@ -231,6 +249,7 @@ function applyPatch(id: string, patch: TaskPatch, now: number): PatchApplication
 
   const task = updateTask(id, patch, now);
   if (task === null) return { task: null, next: null, rows: [], ids: [id] };
+  syncReminder(task, now);
 
   // Only the transition matters, not the resulting status: unticking a task and
   // ticking it again is a new completion and does mint a new occurrence.
@@ -284,7 +303,7 @@ function scheduleNextOccurrence(task: Task, now: number): Task | null {
   // The rule has run out (an exhausted `COUNT` / `UNTIL`) or is not one at all.
   if (dueAt === null) return null;
 
-  return createTask(
+  const next = createTask(
     {
       title: task.title,
       listId: task.listId,
@@ -303,6 +322,28 @@ function scheduleNextOccurrence(task: Task, now: number): Task | null {
     },
     now,
   );
+  // The occurrence carries the reminder lead, so it gets its own waiting instance at
+  // the new due date — otherwise the series would only ever remind once (§5.3).
+  syncReminder(next, now);
+  return next;
+}
+
+/**
+ * Re-derives a task's waiting reminder from what the task now says (§5.3).
+ *
+ * Kept beside the writes rather than in the scheduler because the write is what knows
+ * the intent changed; the scheduler only ever reads the instances this leaves behind.
+ * A task that is not open — done, cancelled, or in the recycle bin — has nothing
+ * waiting, and its instance is dropped rather than deferred: announcing a task the
+ * user has finished is noise, and there is no later moment at which it becomes
+ * correct.
+ */
+function syncReminder(task: Task, now: number): void {
+  if (task.deletedAt !== null || task.status === 'done' || task.status === 'cancelled') {
+    clearPendingReminders([task.id]);
+    return;
+  }
+  replacePendingReminder(task.id, fireAtFor(task.dueAt, task.remindLeadMin), now);
 }
 
 /** Undo entries for a write that read the rows it changed (a delete or a restore). */

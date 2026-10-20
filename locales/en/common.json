@@ -3,5 +3,6 @@
   "action.newTask": "New task",
   "action.today": "Today",
   "action.quit": "Quit",
+  "notify.reminderTitle": "YiChen ToDo",
   "marker.tooltip": "Click to open · drag to move"
 }

@@ -291,6 +291,43 @@ CREATE TABLE sync_journal (         -- 文件夹同步的变更日志（只增�
 
 重复任务不能只存一个 `remind_at`：每次展开出来的是**独立实例**，需要各自的状态（已触发/已稍后/已忽略）。把"下一次触发时间"算在调度器里，把已生成的实例落到 `reminders`，能让"稍后提醒"、"错过的提醒"、"休眠唤醒后补发"三件事都有明确的数据落点。
 
+M04 把下面几条写进了代码（`src/main/db/repositories/reminders.ts` + `src/main/services/tasks.ts`），而不是只写在文档里：
+
+- **`reminders` 只存实例，意图在任务行**：用户表达的是「提前 30 分钟」（`tasks.remind_lead_min`），实例是 `fire_at = due_at - lead × 60_000`（`shared/utils/reminder.ts` 的 `fireAtFor`）。两边任一为空就没有实例——提醒是**相对截止时间**定义的，没有截止就没有可回数的时刻，不补一个默认时间。
+- **写任务即重算实例**：`services/tasks.ts` 的 `syncReminder` 在一次写动作里把任务的等待实例替换成新推导出的那个；`pending` 的旧实例被删除而非保留，否则用户改了截止时间后会在两个时刻各被叫一次。已完成 / 已取消 / 在回收站的任务**没有等待实例**——提醒一件做完的事是噪音，而且没有哪个更晚的时刻能让它变正确。
+- **已经触发过的实例不动**：`state` 一旦离开 `pending` 就是"说过什么"的流水，重算任务不得改写它。`replacePendingReminder` 因此只碰 `pending` 行。
+- **刚落库的实例必须仍在未来**：`fire_at <= now` 不落库。提醒的意义是在截止**之前**开口，武装一个已经路过的时刻等于刚设完就立刻宣布逾期。开机时补发的是另一回事——那是先前武装过、仍是 `pending` 的行。
+- **删除连带清除**：`deleteTasks` 在同一次写入里清掉被墓碑的那批任务（含级联子任务）的等待实例；撤销一个新建也走同一路径。回收站里的任务不该还在被播报。
+- **逾期不足 6 小时的才算"错过"**：调度器启动时把 `fire_at < now - 6h` 的 `pending` 行置为 `dismissed` 而不是补发。晚几小时说还有意义；晚几天说没有——任务本身已经在视图里显示逾期，一串关于上周的通知只会训练用户忽略全部提醒。
+- **一个任务同时只有一个等待实例**：`MIN(fire_at)` 就是调度器要排的下一刻，没有第二处需要去重。
+
+### 5.3.1 调度器：单一时间源，非轮询
+
+`src/main/services/scheduler.ts` 是提醒的唯一时间源：读出最近的 `fire_at`，排**一个** `setTimeout`，触发后重排。**不轮询**——一个三天后才响的提醒，让应用可以真的闲着，这正是标记窗口能是一个 23 kB DOM 页的前提。`setTimeout` 的毫秒数是 32 位有符号，超过约 24.8 天会溢出成立即触发，所以单次等待被切成 `MAX_TIMER_MS` 的片段，片尾的重排与其他任何一次触发走同一条代码路径。
+
+三件让它可单测的事：
+
+- **服务层不 import electron**（§2 的结构性决定）。交付一个提醒意味着一条系统通知、以及无人应答时的一张内置卡片，但调度器只知道**实例**和它对应的任务；`SchedulerDeps.deliver` 是启动时注入的回调，`src/main/platform/notifications.ts` 才是那个会说 OS 语言的人。于是时序规则可以对着一份真库、一只手工拨动的时钟单测，全程不碰 Electron。
+- **时钟可注入**（`now`），**定时器可注入**（`arm`）——测试自己拥有两端，所以断言的是算术与事件顺序，而不是机器跑了多久。
+- **数据库就是记忆**：已交付的实例移到 `fired` 并留在那里，重启不会重播；错过的被标成 `dismissed`。【从不重复】这条规则因此不必记在调度器里——它已经是一行数据。
+
+再排一次的时机是 `services/task-events.ts` 的 `notifyTasksChanged`：那是**每一次写入**的唯一必经点，所以调度器不必被任务服务知道，而一次写入既能武装一个提醒也能取消一个，`MIN(fire_at)` 一处覆盖两种。
+
+### 5.3.2 提醒的两段式交付与去重
+
+`src/main/platform/notifications.ts`。一个到点的提醒被说两遍，第二遍是第一遍的沉默换来的：
+
+1. **系统原生通知**（Windows toast / macOS 通知中心）——在人所在的地方开口，且能在应用退到后台时存活；点击即应答，并把面板打开到那个任务。
+2. 若数分钟后仍无人应答，再浮出**应用内置置顶卡片**（`renderer/panel/src/reminder-card.tsx`），这是 OS 收不走的那一层。
+
+- **两者绝不同时说话**：一个提醒是一个实例一行数据，那行数据就是全部的协调——点击 toast 把实例置为 `dismissed`，卡片定时器开卡前重读该行，发现它已不是 `fired` 就什么都不做。反向亦同：应答卡片时顺带关掉 toast（Windows 上横幅不点会一直留着，留着就是对一件刚处理过的事做第二次、过时的播报）。
+- **卡片只上报"用户看过了"**：`reminder:dismiss` 是提醒域唯一的渲染层→主进程通道（§6.4）。卡片按载荷绘制而不是回头去读提醒——它是一条通知，不是数据的一个视图；主进程无法自己观测的、也只有"卡片被收起了"这一件事。
+- **平台没有通知就只剩卡片**：`Notification.isSupported()` 在某些 Windows / macOS 会话里为假，此时卡片仍按同一只定时器到达，而不是被跳过。
+- **卡片不抢焦点**：`expandPanelForReminder` 与点击展开走同一条摆放路径（锚点矩形，§9.4），但省掉 `focus()` / `moveTop()`。卡片是没人应答时的兜底，把光标从用户正在打字的地方夺走正是两段式想要避免的打扰；不抢焦点也意味着正常的失焦收起定时器不会启动——没拿走什么，就不必还回去。
+- **任务没了就不说**：交付时任务行已不在（在别处被删）则实例直接置为 `dismissed`——一个没有名字可叫的播报比沉默更糟。
+
+M04 P0 落地的档位是 5 / 10 / 30 分钟、1 小时、1 天（`REMIND_LEAD_PRESETS`），详情页把它们画成 chip 并保留原来的数字输入框（`data-field="detail-remind"` 不变，冒烟依赖它）；`leadBucketOf` 决定这个档位该说"分钟 / 小时 / 天"。**Snooze 未实现**：`snooze_until` 列已就位，但卡片上不提供这个按钮——一个说了却不算数的按钮比没有更糟（P2）。
+
 ### 5.4 迁移与备份
 
 - 迁移：`src/main/db/migrations/0001_init.sql` 起顺序编号；启动时在事务内执行，失败则回滚并弹错误页（不静默继续）。
@@ -369,6 +406,8 @@ export const taskCreateInput = z.object({
 - **`undefined` 与 `null` 语义不同**：`undefined` = 不动该字段，`null` = 清空该列。补丁因此在「每次改动即时保存」下可以只带一个字段（M02 D9、§5.2 的 `TaskPatch`）。
 - 与早先草案的两处差异：`listId` / `parentId` 用**有界标识符**而非 `z.string().uuid()`（id 由本项目的 UUID v7 生成，不接受任意 uuid 版本）；`tags` 传的是**标签名**而非标签 id（`tags.name` 已是 UNIQUE，主进程按名去重创建，M02 §4）。
 - 任务通道：`task:query` / `task:create` / `task:update` / `task:delete` / `task:restore` / `task:reorder`，事件 `event:task-changed`。一次写入恰好一次通知，通知只发面板窗口（`services/task-events.ts`）。
+- 附件通道：`attachment:list` / `attachment:add` / `attachment:remove` / `attachment:open` / `attachment:thumbnail`（M03 S3）。
+- 提醒通道（M04）：只有 `reminder:dismiss` 一个渲染层→主进程通道，schema 是 `reminderDismissInput`。其余全是主进程→面板的事件：`event:reminder-due`（卡片到期，载荷 `ReminderDuePayload`：instance id / taskId / title / dueAt）与 `event:task-focus`（toast 被点击要打开的那个任务，载荷 `TaskFocusPayload`）。渲染层既不查询也不排期提醒——主进程说什么时候到，渲染层只负责画出来，以及回答"用户看过了"。
 - 每个 handler 的第一行是 `schema.safeParse(payload)`，**主进程不信渲染层的任何输入**；注册器与各域 handler 共用 `ipc/validate.ts` 的 `invalid()`，保证拒绝形状与日志一致。
 - preload 通过 `contextBridge.exposeInMainWorld('api', ...)` 只暴露白名单方法（`window.api.task.create(...)`），**不暴露 `ipcRenderer` 本体**，渲染层无法发送任意通道。
 - 渲染层不接触 `fs` / `path` / `db`，所有文件操作在主进程完成。

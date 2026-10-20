@@ -96,6 +96,28 @@ const OPACITY_ARROW_PRESSES = 4;
 const OPACITY_STEP_PERCENT = 5;
 const EXPECTED_OPACITY = (100 - OPACITY_ARROW_PRESSES * OPACITY_STEP_PERCENT) / 100;
 
+/** The task phase 12 hangs a reminder on. */
+const REMINDER_TASK = 'Renew the passport';
+
+/**
+ * Phase 12's clock offset, in milliseconds (M04).
+ *
+ * The reminder it arms is due the day after tomorrow minus thirty minutes, so the
+ * offset only has to be larger than a couple of days for that moment to already be
+ * behind the scheduler — which is the whole point of the offset. Three days leaves a
+ * full day of margin, so the phase does not depend on what time of day the run starts:
+ * the *arming* is what has to land in the future, and the day-after-tomorrow due date
+ * guarantees that whatever the hour.
+ */
+const REMIND_CLOCK_OFFSET_MS = 72 * 60 * 60 * 1000;
+
+/**
+ * How long a reminder's fallback card takes under the harness (M04). The app's real
+ * delay is three minutes; this is the same timer, armed for a length a run can wait
+ * out. Two seconds of slack covers the round trip.
+ */
+const REMINDER_CARD_TIMEOUT_MS = 4_000;
+
 const results = [];
 
 function log(message) {
@@ -384,6 +406,29 @@ function inboxRows() {
   return readTasks().filter((row) => row.status === 'todo' || row.status === 'doing');
 }
 
+/**
+ * The reminder instances one task has, oldest first (M04).
+ *
+ * The instances are the scheduler's memory rather than the user's intent, so this is
+ * what the phase reads to see the state it wrote: `pending` before the moment arrives,
+ * `fired` after the notification went out, `dismissed` once it has been answered.
+ */
+function readReminders(taskId) {
+  const Database = require('better-sqlite3');
+  const db = new Database(databaseFile, { readonly: true });
+  try {
+    db.pragma('busy_timeout = 5000');
+    return db
+      .prepare(
+        'SELECT id, task_id AS taskId, fire_at AS fireAt, state, snooze_until AS snoozeUntil ' +
+          'FROM reminders WHERE task_id = ? ORDER BY fire_at ASC, id ASC',
+      )
+      .all(taskId);
+  } finally {
+    db.close();
+  }
+}
+
 /** The stored app settings row (JSON), read straight out of the smoke database. */
 function readAppSettings() {
   const Database = require('better-sqlite3');
@@ -463,6 +508,68 @@ async function gotoAttachmentField(cdp, field, attachmentId) {
 }
 
 /**
+ * What the panel itself says about one named control: whether it is on screen, and the
+ * `data-` attributes it carries (M04).
+ *
+ * The reminder card is asserted through the DOM and not only through the event that
+ * announced it: an event proves the main process spoke, and what the phase cares about
+ * is that something was drawn for the user to read.
+ */
+async function readField(cdp, field) {
+  return evaluate(
+    cdp,
+    `(() => {
+       const node = document.querySelector('[data-field="${field}"]');
+       if (node === null) return null;
+       return {
+         field: node.dataset.field ?? null,
+         taskId: node.dataset.taskId ?? null,
+         reminderId: node.dataset.reminderId ?? null,
+         text: node.textContent,
+       };
+     })()`,
+  );
+}
+
+/**
+ * Sets a date control the way a picker would, without a picker (M04).
+ *
+ * The value goes in through the input's own prototype setter — React tracks the value
+ * it last rendered, and assigning straight to `node.value` would be seen as no change —
+ * and the blur that follows is what the detail commits on. Neither half can be skipped:
+ * the setter alone leaves the edit unsaved, and the blur alone has nothing new to save.
+ */
+async function setDateField(cdp, field, isoDate) {
+  const applied = await requireEval(
+    cdp,
+    `(() => {
+       const node = document.querySelector('[data-field="${field}"]');
+       if (node === null) return null;
+       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+       setter.call(node, ${JSON.stringify(isoDate)});
+       node.dispatchEvent(new Event('input', { bubbles: true }));
+       return node.value;
+     })()`,
+    `set the ${field} control to ${isoDate}`,
+  );
+  if (applied === null) return null;
+  // The commit the detail does on blur only happens if there *was* a blur, so the
+  // control is focused first — and the gap between the two calls lets React flush the
+  // state the commit reads back.
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  return evaluate(
+    cdp,
+    `(() => {
+       const node = document.querySelector('[data-field="${field}"]');
+       if (node === null) return null;
+       node.focus();
+       node.blur();
+       return node.value;
+     })()`,
+  );
+}
+
+/**
  * A real, decodable PNG, small enough to build here rather than commit as a fixture.
  *
  * The preview comes out of the platform's own decoder, so the harness cannot hand it
@@ -535,6 +642,14 @@ function launchApp(electronBinary, dir) {
       YICHEN_SMOKE: '1',
       YICHEN_SMOKE_DIR: dir,
       YICHEN_SMOKE_DB: databaseFile,
+      /**
+       * The reminder harness runs the scheduler's clock `REMIND_CLOCK_OFFSET_MS` ahead
+       * of the wall clock (M04). A reminder is armed *before* its deadline, so a run
+       * that wanted to watch one arrive would have to sit and wait; moving the clock
+       * forward keeps the arithmetic intact — the delay is still `fire_at - now` — while
+       * making the moment already be here.
+       */
+      YICHEN_SMOKE_REMIND_OFFSET_MS: String(REMIND_CLOCK_OFFSET_MS),
     },
     stdio: ['ignore', 'inherit', 'inherit'],
   });
@@ -1921,6 +2036,207 @@ async function main() {
         `the Inbox drew ${JSON.stringify(lastRender?.detail ?? null)} with ` +
           `${JSON.stringify(lastChrome ?? null)}, expected ${openNow.length} open row(s)`,
       );
+    }
+
+    // --- phase 12: a reminder speaks twice, and only once each (M04) -------------
+    //
+    // The last phase, because the harness runs the scheduler's clock three days ahead
+    // (REMIND_CLOCK_OFFSET_MS): from here on, any reminder armed is already due, which
+    // is what lets the run watch the delivery rather than wait out its delay. The
+    // arithmetic under test is untouched by that — the scheduler still computes
+    // `fire_at - now`, and the ordering below is the same one a real three-minute wait
+    // produces.
+    await gotoField(cdp, 'quick-add');
+    const remindAddSince = Date.now();
+    if ((await typeTask(cdp, REMINDER_TASK)) === null) return;
+    await waitForEvent('tasks-rendered', 5_000, remindAddSince);
+
+    const remindRow = readTasks().find((row) => row.title === REMINDER_TASK);
+    if (remindRow === undefined) {
+      fail(`${REMINDER_TASK} is not in the database to hang a reminder on`);
+      return;
+    }
+
+    // A reminder is derived from a deadline (`fireAtFor`), so a task without one has
+    // nothing to schedule — and must not be given a default moment instead. The task
+    // was just created with no due date, so this is that case before the date is set.
+    const beforeDue = readReminders(remindRow.id);
+    if (beforeDue.length === 0) {
+      pass('a task with no deadline arms no reminder: there is nothing to count back from');
+    } else {
+      fail(`a task with no deadline has ${beforeDue.length} reminder instance(s)`);
+    }
+
+    await gotoField(cdp, 'task-title', remindRow.id);
+    const remindOpenSince = Date.now();
+    await pressKey(cdp, 'Enter');
+    await waitForEvent('detail-opened', 5_000, remindOpenSince);
+
+    // The day after tomorrow, so that whatever the hour of the run the *arming* below
+    // lands in the future — a reminder is only armed for a moment still to come, and a
+    // due date of tomorrow would make a one-day lead land in the past at some hours.
+    const dueDay = new Date(dayStart(2));
+    const isoDue =
+      `${dueDay.getFullYear()}-${String(dueDay.getMonth() + 1).padStart(2, '0')}-` +
+      `${String(dueDay.getDate()).padStart(2, '0')}`;
+    const dueSetSince = Date.now();
+    await setDateField(cdp, 'detail-due-date', isoDue);
+    const dueWrite = await waitForEvent('task-changed', 8_000, dueSetSince);
+    if (readTasks().find((row) => row.id === remindRow.id)?.dueAt === dayStart(2)) {
+      pass(`the detail gave "${REMINDER_TASK}" a deadline the day after tomorrow`, {
+        dueAt: dayStart(2),
+        write: dueWrite?.detail?.kind ?? null,
+      });
+    } else {
+      fail(`the deadline landed on ${JSON.stringify(readTasks().find((row) => row.id === remindRow.id)?.dueAt ?? null)}`);
+    }
+
+    // Still no reminder: the lead is what turns the deadline into an instance, and the
+    // task has none yet.
+    if (readReminders(remindRow.id).length === 0) {
+      pass('a deadline without a lead still arms nothing: the lead is the other half');
+    } else {
+      fail('a deadline without a lead armed a reminder anyway');
+    }
+
+    // The preset chip: thirty minutes before the deadline. This is the write that arms
+    // the instance, and the same click reschedules the scheduler onto it.
+    await gotoField(cdp, 'detail-remind-30');
+    const leadSince = Date.now();
+    await pressKey(cdp, 'Enter');
+    const leadWrite = await waitForEvent('task-changed', 8_000, leadSince);
+
+    const expectedFireAt = dayStart(2) - 30 * 60_000;
+    const armed = readReminders(remindRow.id);
+    if (
+      armed.length === 1 &&
+      armed[0].fireAt === expectedFireAt &&
+      readTasks().find((row) => row.id === remindRow.id)?.dueAt === dayStart(2)
+    ) {
+      pass(`the 30-minute chip armed one instance at 30 minutes before the deadline`, {
+        fireAt: armed[0].fireAt,
+        expected: expectedFireAt,
+        write: leadWrite?.detail?.kind ?? null,
+      });
+    } else {
+      fail(
+        `the lead chip left ${JSON.stringify(armed)} with expected fireAt ${expectedFireAt}`,
+      );
+    }
+
+    // One delivery, and the row says so: the instance is moved to `fired` *before* the
+    // OS is asked to draw anything, so the record is what keeps a restart from
+    // announcing it a second time.
+    const notified = await waitForEvent('reminder-notified', 8_000, leadSince);
+    const afterNotify = readReminders(remindRow.id);
+    if (
+      notified?.detail?.taskId === remindRow.id &&
+      afterNotify.length === 1 &&
+      afterNotify[0].state === 'fired'
+    ) {
+      pass('the due instance was handed to the notification layer and recorded as fired', {
+        id: notified.detail.id,
+        state: afterNotify[0].state,
+      });
+    } else {
+      fail(
+        `the notification produced ${JSON.stringify(notified?.detail ?? null)} with row ` +
+          `${JSON.stringify(afterNotify)}`,
+      );
+    }
+
+    // The fallback card, several minutes after the toast in the app and a couple of
+    // seconds under the harness — the same timer either way. It is read off the DOM as
+    // well as the event: the phase cares that something was drawn, not only that the
+    // main process decided to draw it.
+    const cardEvent = await waitForEvent('reminder-card', REMINDER_CARD_TIMEOUT_MS, leadSince);
+    const cardField = await waitForEval(
+      cdp,
+      `(() => {
+         const node = document.querySelector('[data-field="reminder-card"]');
+         if (node === null) return null;
+         return { taskId: node.dataset.taskId, reminderId: node.dataset.reminderId };
+       })()`,
+      REMINDER_CARD_TIMEOUT_MS,
+    );
+    if (
+      cardEvent?.detail?.taskId === remindRow.id &&
+      cardField?.taskId === remindRow.id &&
+      cardField?.reminderId === cardEvent?.detail?.id
+    ) {
+      pass('an unanswered toast was followed by the in-app card, on the same instance', {
+        taskId: cardField.taskId,
+      });
+    } else {
+      fail(
+        `the card event said ${JSON.stringify(cardEvent?.detail ?? null)} and the panel drew ` +
+          `${JSON.stringify(cardField ?? null)}`,
+      );
+    }
+
+    // Answering it is what closes the pair out. The card's own button is the path a
+    // user takes, so the phase presses that rather than the panel's internals.
+    const cardText = await readField(cdp, 'reminder-card');
+    if (cardText?.text?.includes(REMINDER_TASK) === true) {
+      pass('the card named the task it is about', { text: cardText.text });
+    } else {
+      fail(`the card reads ${JSON.stringify(cardText?.text ?? null)}`);
+    }
+
+    await gotoField(cdp, 'reminder-dismiss');
+    const answerSince = Date.now();
+    await pressKey(cdp, 'Enter');
+    const answered = await waitForEvent('reminder-answered', 8_000, answerSince);
+    const afterAnswer = readReminders(remindRow.id);
+    const cardGone = await waitForEval(
+      cdp,
+      `document.querySelector('[data-field="reminder-card"]') === null ? true : null`,
+      3_000,
+    );
+    if (
+      answered?.detail?.id === cardEvent?.detail?.id &&
+      answered?.detail?.by === 'card' &&
+      afterAnswer.length === 1 &&
+      afterAnswer[0].state === 'dismissed' &&
+      cardGone === true
+    ) {
+      pass('answering the card dismissed the instance and took the card off screen', {
+        id: answered.detail.id,
+        state: afterAnswer[0].state,
+      });
+    } else {
+      fail(
+        `answering the card produced ${JSON.stringify(answered?.detail ?? null)} with row ` +
+          `${JSON.stringify(afterAnswer)} and card-gone ${JSON.stringify(cardGone)}`,
+      );
+    }
+
+    // The dedup, measured rather than assumed: over the whole run, exactly one card was
+    // raised for that instance and exactly one answer was recorded. A second card would
+    // mean the toast and the fallback both spoke; a second answer would mean the same
+    // instance was put away twice.
+    const events = readStatus()?.events ?? [];
+    const cards = events.filter(
+      (entry) => entry.type === 'reminder-card' && entry.detail?.id === cardEvent?.detail?.id,
+    );
+    const answers = events.filter(
+      (entry) => entry.type === 'reminder-answered' && entry.detail?.id === cardEvent?.detail?.id,
+    );
+    if (cards.length === 1 && answers.length === 1) {
+      pass('the instance was raised once and answered once: the two surfaces never both spoke', {
+        cards: cards.length,
+        answers: answers.length,
+      });
+    } else {
+      fail(`the instance was raised ${cards.length} time(s) and answered ${answers.length} time(s)`);
+    }
+
+    // And nothing new was armed behind it: an answered instance is not rescheduled, so
+    // its row is the only one the task has.
+    if (readReminders(remindRow.id).length === 1) {
+      pass('an answered reminder was not re-armed: one instance, one row');
+    } else {
+      fail(`the answered task has ${readReminders(remindRow.id).length} instances`);
     }
   } finally {
     if (cdp !== null) cdp.close();

@@ -9,6 +9,7 @@ import { applyBootParams } from '../../shared-ui/boot';
 import { changeLocale } from '../../shared-ui/i18n';
 import { PanelSettings } from './panel-settings';
 import { QuickAdd } from './quick-add';
+import { ReminderCard } from './reminder-card';
 import { TaskDetail } from './task-detail';
 import { TaskList } from './task-list';
 import { usePanelStore } from './store';
@@ -35,6 +36,8 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
   const setView = usePanelStore((state) => state.setView);
   const tasks = usePanelStore((state) => state.tasks);
   const openTask = usePanelStore((state) => state.openTask);
+  const openTaskDetail = usePanelStore((state) => state.openTaskDetail);
+  const showReminder = usePanelStore((state) => state.showReminder);
   const [open, setOpen] = useState(false);
   const [durationMs, setDurationMs] = useState(160);
   const resize = usePanelResize();
@@ -83,6 +86,28 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
       void setView(next);
     });
   }, [closeTaskDetail, setView]);
+
+  /*
+   * The two reminder events (M04). A card is pushed rather than fetched — the main
+   * process decided it was time, and the panel's job is only to draw it — and a task
+   * focus is the toast's click, which opens the row the toast named.
+   *
+   * The focus handler leaves the view alone: opening a task jumps the list out of the
+   * way anyway (the detail replaces it, M02 D6), so switching views underneath would be
+   * a change the user never asked for and would see on the way back.
+   */
+  useEffect(() => {
+    const offCard = window.api.on.reminderDue((reminder) => {
+      showReminder(reminder);
+    });
+    const offFocus = window.api.on.taskFocus(({ taskId }) => {
+      void openTaskDetail(taskId);
+    });
+    return () => {
+      offCard();
+      offFocus();
+    };
+  }, [openTaskDetail, showReminder]);
 
   useEffect(() => {
     return window.api.on.themeChanged((params) => {
@@ -136,6 +161,14 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
         style={{ transitionDuration: `${durationMs}ms` }}
         onTransitionEnd={handleTransitionEnd}
       >
+        {/*
+         * A reminder's card sits above both surfaces, not only the list (M04): a task
+         * whose moment has come is read wherever the user happens to be, and hiding it
+         * because a detail view is open would leave the second half of the delivery
+         * with nowhere to land.
+         */}
+        <ReminderCard />
+
         {openTask === null ? (
           <>
             <header className="flex items-baseline justify-between gap-2">

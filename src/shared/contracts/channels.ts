@@ -96,6 +96,14 @@ export const IPC = {
      */
     thumbnail: 'attachment:thumbnail',
   },
+  reminder: {
+    /**
+     * Renderer -> main: the user answered a reminder card. The main process owns the
+     * instance's state, and this is the one fact about it a renderer can report —
+     * whether the notification was clicked is not observable from the panel (M04).
+     */
+    dismiss: 'reminder:dismiss',
+  },
   i18n: {
     setLocale: 'i18n:set-locale',
   },
@@ -128,6 +136,18 @@ export const IPC = {
      * command, and switching it by hand is the same state (M02 S8).
      */
     panelView: 'event:panel-view',
+    /**
+     * Main -> panel: a reminder's in-app card is due — the OS notification for the
+     * same instance went unanswered (M04). The two are never up at once: answering
+     * either one withdrawals the other, and the main process's reminder row is where
+     * that decision is written down.
+     */
+    reminderDue: 'event:reminder-due',
+    /**
+     * Main -> panel: open this task. Sent when a reminder notification is clicked,
+     * which is the one surface that is not the panel asking for something itself.
+     */
+    taskFocus: 'event:task-focus',
   },
 } as const;
 

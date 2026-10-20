@@ -7,10 +7,15 @@ import { registerIpcHandlers } from './ipc/register';
 import { currentLocale, initI18n, t } from './i18n';
 import { createLogger, initLogFile, logFilePath } from './logger';
 import { databaseFile, logsDir } from './platform/paths';
-import { isSmokeEnabled, smokeReady, smokeRecord } from './platform/smoke';
+import {
+  closeAllReminderSurfaces,
+  deliverReminder,
+} from './platform/notifications';
+import { isSmokeEnabled, smokeClockOffsetMs, smokeReady, smokeRecord } from './platform/smoke';
 import { registerShortcuts, unregisterShortcuts } from './platform/shortcuts';
 import { createTray, destroyTray } from './platform/tray';
 import { broadcastTheme } from './services/broadcast';
+import { startReminderScheduler, stopReminderScheduler } from './services/scheduler';
 import { appSettings, resolveBoot } from './services/settings';
 import { createMarkerWindow } from './windows/marker';
 import { createPanelWindow, expandPanel } from './windows/panel';
@@ -79,9 +84,21 @@ async function start(): Promise<void> {
   createMarkerWindow(boot);
   createPanelWindow(boot);
 
-  log('===== group 6/6 · system integration (tray, shortcuts, theme)');
+  log('===== group 6/6 · system integration (tray, shortcuts, theme, reminders)');
   createTray();
   registerShortcuts();
+
+  // Reminders last, and after the windows: the scheduler's delivery opens the panel,
+  // so it must not announce anything into a process that has no panel to open (§5.3).
+  // It reads the instances the task writes left behind, so its own start-up is also
+  // where a reminder missed while the app was closed is dealt with.
+  // The offset is the reminder harness asking for the moment now rather than later
+  // (platform/smoke.ts), so a run does not have to sit and wait for it.
+  const clockOffset = smokeClockOffsetMs();
+  startReminderScheduler({
+    deliver: deliverReminder,
+    ...(clockOffset > 0 ? { now: () => Date.now() + clockOffset } : {}),
+  });
 
   nativeTheme.on('updated', () => {
     if (appSettings().themeMode === 'system') {
@@ -109,6 +126,9 @@ function registerLifecycle(): void {
 
   app.on('will-quit', () => {
     log('shutting down');
+    stopReminderScheduler();
+    // A toast and a card timer belong to this process; neither should outlive it.
+    closeAllReminderSurfaces();
     unregisterShortcuts();
     destroyTray();
     closeDatabase();

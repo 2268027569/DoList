@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import type { TaskBulkOp, TaskPatchInput, TaskQueryInput } from '@shared/contracts/task';
+import type { ReminderDuePayload } from '@shared/contracts/reminder';
 import { isArchiveView } from '@shared/types/app';
 import type { BootParams, PanelState, PanelView } from '@shared/types/app';
 import type { Attachment, ReorderScope, TaskListItem, TaskWithTags } from '@shared/types/task';
@@ -156,6 +157,13 @@ interface PanelStore {
    */
   selectedIds: string[];
 
+  /**
+   * The reminder card waiting to be read, or `null` (M04). At most one at a time: two
+   * cards stacked would be the same interruption twice, and the second reminder is
+   * still in the OS notification queue behind this one.
+   */
+  dueReminder: ReminderDuePayload | null;
+
   /** True after a write came back rejected, so the detail can say so. */
   saveFailed: boolean;
 
@@ -214,6 +222,15 @@ interface PanelStore {
   /** Opens one attachment with whatever handler the OS has for it. */
   openAttachment: (id: string) => Promise<void>;
 
+  /** Puts a reminder's card on screen (M04). Sent by the main process, never asked for. */
+  showReminder: (reminder: ReminderDuePayload) => void;
+  /**
+   * Answers the reminder card: `done` ticks the task off as well, `dismiss` only puts
+   * the card away. Both tell the main process, which is what keeps the OS notification
+   * for the same instance from being a second announcement (M04).
+   */
+  answerReminder: (by: 'done' | 'dismiss') => Promise<void>;
+
   setBoot: (boot: BootParams) => void;
   setPanelState: (state: PanelState) => void;
 }
@@ -237,6 +254,7 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
   attachments: [],
   thumbnails: {},
   selectedIds: [],
+  dueReminder: null,
   saveFailed: false,
 
   refreshTasks: async () => {
@@ -514,6 +532,28 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
     // A file that has been moved or deleted since it was attached is reported
     // rather than opened: the row is still a true record of what was attached.
     if (!result.ok) set({ saveFailed: true });
+  },
+
+  showReminder: (reminder) => set({ dueReminder: reminder }),
+
+  answerReminder: async (by) => {
+    const reminder = get().dueReminder;
+    if (reminder === null) return;
+
+    // The card goes away first: the write below announces itself and re-reads the
+    // rows, and a card sitting over that would be answering a task the user has
+    // already finished.
+    set({ dueReminder: null });
+
+    // `done` is the same write the list's own checkbox makes, not a second path: a
+    // task ticked from the card leaves the view exactly as one ticked anywhere else.
+    if (by === 'done') {
+      const result = await window.api.task.update(reminder.taskId, { status: 'done' });
+      if (!result.ok) set({ saveFailed: true });
+    }
+    // Told last, and told whatever happened: the reminder was read either way, and the
+    // main process needs that to keep the OS notification for it from speaking again.
+    await window.api.reminder.dismiss(reminder.id);
   },
 
   setBoot: (boot) => set({ boot }),
