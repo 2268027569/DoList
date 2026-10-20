@@ -23,12 +23,16 @@
  *      draws in the place the completed row had occupied (slice S6),
  *  12. two rows are multi-selected and one bulk command sets them both (slice S7),
  *  13. a single `Ctrl+Z` takes that whole command back (slice S7),
- *  14. switching to the 今日 tab filters the same list rather than copying it, and a
- *      task added there is stored due today (slice S8), and
+ *  14. switching to 今日 in the sidebar filters the same list rather than copying it,
+ *      and a task added there is stored due today (slice S8), and
  *  15. switching back to the Inbox shows it again, next to the rows that are not due
  *      today (slice S8), and
  *  16. the panel's own opacity slider dims its surface and stores the value it settled
- *      on (M01 §9.9).
+ *      on (M01 §9.9), and
+ *  17. the six views of M03 S1 filter one list rather than copying it — the archive
+ *      draws the rows the ticks took out, ticking one there takes it back, a task
+ *      abandoned through the detail shows up only in 已取消, and one added in 明天 is
+ *      stored due tomorrow.
  *
  * Only two things come from the OS: the global shortcut, which a registered hotkey
  * only ever sees when the input queue produced it, and the app's own launch. Every
@@ -71,6 +75,8 @@ const SECOND_TASK = 'Call the vet';
 const SUBTASK = 'Take the big bag';
 /** Added while the 今日 view is showing, so it is due today by the view's own rule. */
 const TODAY_TASK = 'Call the plumber';
+/** Added while the 明天 view is showing, so the view's own rule dates it tomorrow. */
+const TOMORROW_TASK = 'Book the flight';
 
 /**
  * Phase 10's slider step. Four arrow presses of five percent each take the default
@@ -1247,9 +1253,9 @@ async function main() {
     }
 
     // --- phase 9: 今日 is a filter, not a second copy of the list (slice S8) ---
-    // The tabs set the same state the app menu's 今日 item asks for over
-    // `event:panel-view`, so driving the tab covers the view itself; the right-click
-    // and the menu are the marker harness's phase 5.
+    // The sidebar sets the same state the app menu's 今日 item asks for over
+    // `event:panel-view`, so driving the sidebar covers the view itself; the
+    // right-click and the menu are the marker harness's phase 5.
     await gotoField(cdp, 'view-today');
     const todaySince = Date.now();
     await pressKey(cdp, 'Enter');
@@ -1384,6 +1390,269 @@ async function main() {
       fail(
         `the settings row holds panelOpacity ${JSON.stringify(stored?.panelOpacity ?? null)}, ` +
           `expected ${EXPECTED_OPACITY}`,
+      );
+    }
+
+    // --- phase 11: six views of one list (M03 S1) ----------------------------
+    // Every view is the Inbox filter with a different status or a different window over
+    // `due_at` (M03 D3), so each check works out what the view *should* hold by
+    // applying that filter to the database by hand, and compares it with what the panel
+    // reported drawing. A filter written wrong in the query fails here rather than by
+    // eye, and nothing below reads a row out of `tasks-rendered` alone.
+    const chrome = () =>
+      evaluate(
+        cdp,
+        `(() => {
+           const marked = [...document.querySelectorAll('[data-field^="view-"]')]
+             .filter((node) => node.getAttribute('aria-current') === 'page')
+             .map((node) => node.dataset.view);
+           return {
+             current: marked[0] ?? null,
+             toggles: document.querySelectorAll('[data-field="row-toggle"]').length,
+             quickAdd: document.querySelector('[data-field="quick-add"]') !== null,
+           };
+         })()`,
+      );
+    const titlesOf = (rows) => rows.map((row) => row.title).sort();
+    const rowsByStatus = (status) => readTasks().filter((row) => row.status === status);
+
+    // A tick in the Inbox is what puts a row in 已完成, and it is made here rather than
+    // read out of an earlier phase so this phase stands on its own: the row it creates
+    // is the row it archives, and then the row it takes back out again. The Inbox is
+    // already the view showing (phase 9 left it there), so asking for it again is a
+    // no-op — `setView` returns early rather than re-reading a view already on screen.
+    await gotoField(cdp, 'view-inbox');
+    await pressKey(cdp, 'Enter');
+    const inboxChrome = await chrome();
+    const archivedRow = inboxRows()[0];
+    if (inboxChrome?.current === 'inbox' && archivedRow !== undefined) {
+      pass('the Inbox is the view showing, with a row to archive');
+    } else {
+      fail(
+        `the panel marks ${JSON.stringify(inboxChrome?.current ?? null)} with no row to archive in ` +
+          `${JSON.stringify(readTasks().map((row) => row.title))}`,
+      );
+    }
+    if (archivedRow === undefined) return;
+
+    await gotoField(cdp, 'row-toggle', archivedRow.id);
+    const tickWrite = await pressKeyAndWait(cdp, 'Enter');
+    const tickedRow = readTasks().find((row) => row.id === archivedRow.id);
+    if (tickWrite !== null && tickedRow?.status === 'done') {
+      pass(`ticking "${archivedRow.title}" in the Inbox marked it done`, { status: tickedRow.status });
+    } else {
+      fail(`ticking "${archivedRow.title}" left status ${JSON.stringify(tickedRow?.status ?? null)}`);
+    }
+
+    // 已完成 draws exactly those rows and nothing else: it is the same query with
+    // `status: done`, newest completion first (M03 D3/D4). The sidebar also has to
+    // agree about which view is showing — a highlight that lags the list is a panel
+    // telling the user two different things.
+    const doneRows = rowsByStatus('done');
+    await gotoField(cdp, 'view-completed');
+    const completedSince = Date.now();
+    await pressKey(cdp, 'Enter');
+    const completedRender = await waitForEvent('tasks-rendered', 5_000, completedSince);
+    const completedChrome = await chrome();
+    if (
+      completedRender?.detail?.view === 'completed' &&
+      completedRender?.detail?.count === doneRows.length &&
+      JSON.stringify([...(completedRender.detail.titles ?? [])].sort()) ===
+        JSON.stringify(titlesOf(doneRows)) &&
+      completedChrome?.current === 'completed'
+    ) {
+      pass('已完成 drew exactly the rows the ticks took out of the Inbox', completedRender.detail.titles);
+    } else {
+      fail(
+        `已完成 drew ${JSON.stringify(completedRender?.detail ?? null)} and marked ` +
+          `${JSON.stringify(completedChrome?.current ?? null)}, expected ${doneRows.length} row(s) ` +
+          `${JSON.stringify(titlesOf(doneRows))}`,
+      );
+    }
+    if (completedChrome?.quickAdd === false) {
+      pass('已完成 offered no quick-add: a "to do" typed there would not be a done task');
+    } else {
+      fail('已完成 still drew a quick-add field');
+    }
+
+    // Ticking a row inside 已完成 takes it back to `todo` (M03 D5), which is how a
+    // wrong tick is undone — and the row leaves the archive it was in as it goes.
+    await gotoField(cdp, 'row-toggle', archivedRow.id);
+    const recoverSince = Date.now();
+    await pressKey(cdp, 'Enter');
+    const recoverWrite = await waitForEvent('task-changed', 8_000, recoverSince);
+    const recovered = readTasks().find((row) => row.id === archivedRow.id);
+    const completedAfter = await waitForEvent('tasks-rendered', 5_000, recoverSince);
+    if (
+      recoverWrite !== null &&
+      recovered?.status === 'todo' &&
+      completedAfter?.detail?.view === 'completed' &&
+      completedAfter?.detail?.count === doneRows.length - 1
+    ) {
+      pass(`ticking "${archivedRow.title}" in 已完成 put it back to todo and out of the archive`, {
+        status: recovered.status,
+        count: completedAfter.detail.count,
+      });
+    } else {
+      fail(
+        `ticking the archived row left status ${JSON.stringify(recovered?.status ?? null)} with ` +
+          `${JSON.stringify(completedAfter?.detail?.count ?? null)} row(s) in 已完成, expected todo and ` +
+          `${doneRows.length - 1}`,
+      );
+    }
+
+    // 已取消 is the other archive, and the detail's status control is how a row gets
+    // there: nothing is cancelled by a tick, so the row is abandoned where its other
+    // fields are edited.
+    await gotoField(cdp, 'view-inbox');
+    const inboxAgainSince = Date.now();
+    await pressKey(cdp, 'Enter');
+    await waitForEvent('tasks-rendered', 5_000, inboxAgainSince);
+
+    const abandonRow = readTasks().find((row) => row.title === TODAY_TASK);
+    if (abandonRow === undefined) {
+      fail(`${TODAY_TASK} is not in the database to abandon`);
+      return;
+    }
+
+    await gotoField(cdp, 'task-title', abandonRow.id);
+    const openedSince = Date.now();
+    await pressKey(cdp, 'Enter');
+    await waitForEvent('detail-opened', 5_000, openedSince);
+    await gotoField(cdp, 'detail-status-cancelled');
+    await pressKeyAndWait(cdp, 'Enter');
+    const abandoned = readTasks().find((row) => row.id === abandonRow.id);
+    if (abandoned?.status === 'cancelled') {
+      pass(`the detail's status control abandoned "${TODAY_TASK}"`, { status: abandoned.status });
+    } else {
+      fail(`"${TODAY_TASK}" reads ${JSON.stringify(abandoned?.status ?? null)} after being cancelled`);
+    }
+
+    const closedSince = Date.now();
+    await pressKey(cdp, 'Escape');
+    await waitForEvent('detail-closed', 5_000, closedSince);
+
+    // 已取消 draws only cancelled rows, and offers neither a tick nor a quick-add: a
+    // cancelled row is reopened by editing it, and there is no work in the view to add
+    // to (M03 D5/D6).
+    const cancelledRows = rowsByStatus('cancelled');
+    await gotoField(cdp, 'view-cancelled');
+    const cancelledSince = Date.now();
+    await pressKey(cdp, 'Enter');
+    const cancelledRender = await waitForEvent('tasks-rendered', 5_000, cancelledSince);
+    const cancelledChrome = await chrome();
+    if (
+      cancelledRows.length > 0 &&
+      cancelledRender?.detail?.view === 'cancelled' &&
+      cancelledRender?.detail?.count === cancelledRows.length &&
+      JSON.stringify([...(cancelledRender.detail.titles ?? [])].sort()) ===
+        JSON.stringify(titlesOf(cancelledRows)) &&
+      cancelledChrome?.current === 'cancelled'
+    ) {
+      pass('已取消 drew only the cancelled rows', cancelledRender.detail.titles);
+    } else {
+      fail(
+        `已取消 drew ${JSON.stringify(cancelledRender?.detail ?? null)} and marked ` +
+          `${JSON.stringify(cancelledChrome?.current ?? null)}, expected ${cancelledRows.length} row(s) ` +
+          `${JSON.stringify(titlesOf(cancelledRows))}`,
+      );
+    }
+    if (cancelledChrome?.toggles === 0 && cancelledChrome?.quickAdd === false) {
+      pass('已取消 drew no tick and no quick-add: there is nothing in it to do');
+    } else {
+      fail(`已取消 drew ${JSON.stringify(cancelledChrome ?? null)}, expected no controls`);
+    }
+
+    // 明天 keeps the quick-add, because it is a day: the view's rule dates the row as
+    // it stores it (M03 D6), which is what keeps the new row inside the filter that
+    // just created it.
+    await gotoField(cdp, 'view-tomorrow');
+    const tomorrowSince = Date.now();
+    await pressKey(cdp, 'Enter');
+    const tomorrowRender = await waitForEvent('tasks-rendered', 5_000, tomorrowSince);
+    const tomorrowChrome = await chrome();
+    if (tomorrowRender?.detail?.view === 'tomorrow' && tomorrowChrome?.quickAdd === true) {
+      pass('明天 kept a quick-add: a task added there has a day to belong to');
+    } else {
+      fail(
+        `明天 drew ${JSON.stringify(tomorrowRender?.detail ?? null)} with ` +
+          `quick-add ${JSON.stringify(tomorrowChrome?.quickAdd ?? null)}`,
+      );
+    }
+
+    await gotoField(cdp, 'quick-add');
+    const tomorrowAddSince = Date.now();
+    if ((await typeTask(cdp, TOMORROW_TASK)) === null) return;
+    const tomorrowRow = readTasks().find((row) => row.title === TOMORROW_TASK);
+    if (tomorrowRow?.dueAt === dayStart(1) && tomorrowRow?.dueHasTime === 0) {
+      pass('a task added in 明天 is due tomorrow at local midnight, date only', {
+        dueAt: tomorrowRow.dueAt,
+        expected: dayStart(1),
+      });
+    } else {
+      fail(
+        `the task added in 明天 reads dueAt ${JSON.stringify(tomorrowRow?.dueAt ?? null)} with ` +
+          `dueHasTime ${JSON.stringify(tomorrowRow?.dueHasTime ?? null)}, expected ${dayStart(1)} and 0`,
+      );
+    }
+
+    const tomorrowAfterAdd = await waitForEvent('tasks-rendered', 5_000, tomorrowAddSince);
+    if (
+      tomorrowAfterAdd?.detail?.view === 'tomorrow' &&
+      tomorrowAfterAdd?.detail?.titles?.includes(TOMORROW_TASK)
+    ) {
+      pass('明天 drew the row it was given, in the view that dated it', tomorrowAfterAdd.detail.titles);
+    } else {
+      fail(`明天 drew ${JSON.stringify(tomorrowAfterAdd?.detail ?? null)} after the add`);
+    }
+
+    // 即将到期 is tomorrow through the seventh day with today excluded (M03 D3): a
+    // closed window the day-dated rows can be compared against by hand.
+    const upcomingSince = Date.now();
+    await gotoField(cdp, 'view-upcoming');
+    await pressKey(cdp, 'Enter');
+    const upcomingRender = await waitForEvent('tasks-rendered', 5_000, upcomingSince);
+    const expectedUpcoming = inboxRows().filter(
+      (row) => row.dueAt !== null && row.dueAt >= dayStart(1) && row.dueAt < dayStart(8),
+    );
+    if (
+      upcomingRender?.detail?.view === 'upcoming' &&
+      JSON.stringify([...(upcomingRender.detail.titles ?? [])].sort()) ===
+        JSON.stringify(titlesOf(expectedUpcoming)) &&
+      (upcomingRender.detail.titles ?? []).includes(TOMORROW_TASK)
+    ) {
+      pass('即将到期 drew tomorrow through the seventh day, and nothing from 今天', {
+        titles: upcomingRender.detail.titles,
+        window: [dayStart(1), dayStart(8)],
+      });
+    } else {
+      fail(
+        `即将到期 drew ${JSON.stringify(upcomingRender?.detail ?? null)}, expected ` +
+          `${JSON.stringify(titlesOf(expectedUpcoming))}`,
+      );
+    }
+
+    // And the Inbox is back, quick-add and all: every one of the six views is the same
+    // list read through a different filter, so none of them took a row away from it.
+    const openNow = inboxRows();
+    await gotoField(cdp, 'view-inbox');
+    const lastSince = Date.now();
+    await pressKey(cdp, 'Enter');
+    const lastRender = await waitForEvent('tasks-rendered', 5_000, lastSince);
+    const lastChrome = await chrome();
+    if (
+      lastRender?.detail?.view === 'inbox' &&
+      lastRender?.detail?.count === openNow.length &&
+      lastChrome?.quickAdd === true &&
+      lastChrome?.current === 'inbox'
+    ) {
+      pass('the Inbox came back with its quick-add and every row that is still open', {
+        count: lastRender.detail.count,
+      });
+    } else {
+      fail(
+        `the Inbox drew ${JSON.stringify(lastRender?.detail ?? null)} with ` +
+          `${JSON.stringify(lastChrome ?? null)}, expected ${openNow.length} open row(s)`,
       );
     }
   } finally {

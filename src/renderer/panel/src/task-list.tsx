@@ -9,6 +9,7 @@ import { progressText } from '@shared/utils/task-tree';
 
 import { TaskRow } from './task-row';
 import { usePanelStore } from './store';
+import { VIEW_COPY } from './views';
 
 /** A row's band, measured when the drag starts. */
 interface RowBand {
@@ -32,9 +33,10 @@ interface DragState {
 }
 
 /**
- * The Inbox list (M02-PLAN §6). It renders whatever the last query returned and
- * holds no copy of its own, so `event:task-changed` → `refreshTasks` is the only
- * thing that makes it move.
+ * The list (M02-PLAN §6). It renders whatever the current view's last query returned
+ * and holds no copy of its own, so `event:task-changed` → `refreshTasks` is the only
+ * thing that makes it move. What the view *is* — six filters over one table — is the
+ * store's business (M03 S1); the list draws the result and says how it is empty.
  *
  * Reordering is the list's own job (M02 S5): a pointer drag on a row's grip, and
  * `Alt+↑/↓` for the keyboard. Both end in the one `moveTask`, which writes the
@@ -181,7 +183,7 @@ export function TaskList(): ReactElement {
         data-field="list-empty"
         className="rounded-lg bg-[var(--bg-surface-muted)] px-3 py-2 text-sm text-[var(--text-muted)]"
       >
-        {t(view === 'today' ? 'today.empty' : 'inbox.empty')}
+        {t(VIEW_COPY[view].empty)}
       </p>
     );
   }

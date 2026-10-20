@@ -120,8 +120,11 @@ export interface Attachment {
   createdAt: number;
 }
 
-/** Row order `queryTasks` returns. `manual` is the stored `sort_order`. */
-export const TASK_SORTS = ['manual', 'due', 'priority', 'created', 'title'] as const;
+/**
+ * Row order `queryTasks` returns. `manual` is the stored `sort_order`; `completed`
+ * is newest completion first, which is the axis an archive reads along (M03 D4).
+ */
+export const TASK_SORTS = ['manual', 'due', 'priority', 'created', 'title', 'completed'] as const;
 export type TaskSort = (typeof TASK_SORTS)[number];
 
 export interface TaskFilter {

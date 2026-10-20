@@ -16,13 +16,14 @@ describe('main-process i18n', () => {
   });
 
   it('resolves ICU plurals for English', async () => {
-    expect(t('tasks:summary.pending', { count: 0 })).toBe('Nothing left for today');
-    expect(t('tasks:summary.pending', { count: 3 })).toBe('3 tasks left today');
+    expect(t('tasks:view.count', { count: 0 })).toBe('Nothing here');
+    expect(t('tasks:view.count', { count: 1 })).toBe('1 task');
+    expect(t('tasks:view.count', { count: 3 })).toBe('3 tasks');
   });
 
   it('resolves ICU plurals for Chinese', async () => {
     await initI18n('zh-Hans');
-    expect(t('tasks:summary.pending', { count: 2 })).toBe('今天还有 2 项待办');
+    expect(t('tasks:view.count', { count: 2 })).toBe('2 项任务');
     await initI18n('en');
   });
 

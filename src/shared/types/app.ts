@@ -56,11 +56,23 @@ export interface MarkerAnchor {
 export type PanelState = 'hidden' | 'expanding' | 'shown' | 'collapsing';
 
 /**
- * Which slice of the tasks the panel lists (docs/M02-PLAN.md §8, slice S8). Two
- * views: the Inbox, and everything due by the end of today. A view with its own
- * identity — a list, a tag, a saved search — is M03.
+ * Which slice of the tasks the panel lists (docs/M03-PLAN.md §2). Six views, and
+ * they are all the same query with a different filter (§5.1): the Inbox and the
+ * dated slices beside it, plus the two archives. A view with a faceted identity —
+ * a list of its own, a tag, a saved search — is still M03.
  */
-export type PanelView = 'inbox' | 'today';
+export type PanelView = 'inbox' | 'today' | 'tomorrow' | 'upcoming' | 'completed' | 'cancelled';
+
+/**
+ * The two views that show rows whose story is over, rather than work still to be
+ * done (M03 D5). They are the ones where adding a task makes no sense and where
+ * the list stops offering the controls that are about ordering work.
+ */
+export const ARCHIVE_VIEWS: readonly PanelView[] = ['completed', 'cancelled'];
+
+export function isArchiveView(view: PanelView): boolean {
+  return ARCHIVE_VIEWS.includes(view);
+}
 
 /** Resolved boot parameters handed to both renderers (docs/ARCHITECTURE.md §7). */
 export interface BootParams {

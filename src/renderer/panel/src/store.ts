@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 
 import type { TaskBulkOp, TaskPatchInput, TaskQueryInput } from '@shared/contracts/task';
+import { isArchiveView } from '@shared/types/app';
 import type { BootParams, PanelState, PanelView } from '@shared/types/app';
 import type { Attachment, ReorderScope, TaskListItem, TaskWithTags } from '@shared/types/task';
 import { localDayBounds } from '@shared/utils/day';
@@ -8,23 +9,82 @@ import { moveWithin } from '@shared/utils/sort-order';
 
 /**
  * The Inbox: top-level tasks that are still open and belong to no list
- * (`list_id = NULL`, docs/ARCHITECTURE.md §5.2). Lists with their own identity are
- * M03; the panel has the Inbox and 今日 (M02 S8).
+ * (`list_id = NULL`, docs/ARCHITECTURE.md §5.2). It is also the base of every dated
+ * view — those are the Inbox with a window over `due_at` — and of the two archives,
+ * which keep the same "unfiled, top level" scope and swap the status.
  */
 const INBOX_FILTER: TaskQueryInput = { listId: null, parentId: null, status: ['todo', 'doing'] };
 
 /** The group the list's manual order lives in, which is also what a move rewrites. */
 const INBOX_SCOPE: ReorderScope = { kind: 'top', listId: null };
 
-/** The filter one view stands for (`setView` / `refreshTasks`). */
-function filterFor(view: PanelView): TaskQueryInput {
-  if (view === 'inbox') return INBOX_FILTER;
+/**
+ * Local midnight `offset` days from today. Built from the date parts rather than by
+ * adding 24 hours, so a day that is not that long (a DST transition) still lands on
+ * a midnight — the same reason `localDayBounds` rebuilds instead of adding (§5.1).
+ */
+function dayStart(offset: number): number {
+  const date = new Date();
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + offset).getTime();
+}
 
-  // 今日 is "due by the end of the local day", overdue included: the repository
-  // offers a half-open window over `due_at`, and its open end is exactly that.
-  // A task with no due date is not due today, so it stays in the Inbox rather than
-  // being pulled in to make the view look fuller.
-  return { ...INBOX_FILTER, dueTo: localDayBounds(Date.now()).end };
+/**
+ * The filter one view stands for (`setView` / `refreshTasks`, docs/M03-PLAN.md D3).
+ *
+ * Six views, one query: showing another view is re-reading the same table through a
+ * different filter, never a second copy of the rows (ARCHITECTURE §5.1).
+ */
+function filterFor(view: PanelView): TaskQueryInput {
+  // 明天 is where both dated views start: 明天 is that one day, 即将到期 the seven days
+  // from there. Resolved from the same clock the views themselves are.
+  const tomorrow = localDayBounds(dayStart(1));
+
+  switch (view) {
+    case 'inbox':
+      return INBOX_FILTER;
+
+    // 今日 is "due by the end of the local day", overdue included: the repository's
+    // window over `due_at` is half-open, and its open end is exactly that. A task
+    // with no due date is not due today, so it stays in the Inbox rather than being
+    // pulled in to make the view look fuller.
+    case 'today':
+      return { ...INBOX_FILTER, dueTo: localDayBounds(Date.now()).end };
+
+    // 明天 is a closed day (`dueFrom` 明天零点, `dueTo` 明天末尾), so overdue rows stay
+    // out of it: they are today's business, and 今日 is where the overdue chip lives.
+    case 'tomorrow':
+      return { ...INBOX_FILTER, dueFrom: tomorrow.start, dueTo: tomorrow.end };
+
+    // 即将到期 is tomorrow through the seventh day, today excluded — today has a view
+    // of its own, and a list that repeated it would be the same list twice.
+    case 'upcoming':
+      return { ...INBOX_FILTER, dueFrom: tomorrow.start, dueTo: localDayBounds(dayStart(7)).end };
+
+    // The archives. 已完成 reads newest first: `sort_order` is the order the open rows
+    // were dragged into, which says nothing about when they were finished (D4).
+    case 'completed':
+      return { ...INBOX_FILTER, status: ['done'], sort: 'completed' };
+
+    case 'cancelled':
+      return { ...INBOX_FILTER, status: ['cancelled'] };
+  }
+}
+
+/**
+ * The `dueAt` a task gets when it is added from a view's quick-add (M03 D6), as a day
+ * rather than an instant — the same shape the detail's 今天 preset writes (S4).
+ *
+ * The rule is "a view with a definite date supplies it": the view *is* the filter, so
+ * a task stored without a date would be written and then not drawn, which is the
+ * opposite of what "add to 明天" means. A view with no date of its own leaves the
+ * field alone.
+ */
+function defaultDueAt(view: PanelView): number | null {
+  if (view === 'today') return dayStart(0);
+  // 明天 and 即将到期 both start at tomorrow, so that is the day a row added from
+  // either one belongs to — and the first day either view would draw it in.
+  if (view === 'tomorrow' || view === 'upcoming') return dayStart(1);
+  return null;
 }
 
 /**
@@ -41,10 +101,11 @@ interface PanelStore {
   panelState: PanelState;
 
   /**
-   * Which slice of the tasks the list is showing (M02 S8). Two views, and the
-   * panel owns the choice: the app menu's 今日 item asks for it over
-   * `event:panel-view`, and the tabs in the header set it directly, both landing
-   * on this one field.
+   * Which slice of the tasks the list is showing (M03 S1). Six views, and the panel
+   * owns the choice: the app menu's 今日 item asks for it over `event:panel-view`,
+   * and the sidebar sets it directly, both landing on this one field. There is one
+   * entrance per view, on purpose — two controls writing one state leave the user
+   * unable to tell which of them is showing the truth.
    */
   view: PanelView;
 
@@ -193,13 +254,20 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
   },
 
   addTask: async (title) => {
-    // Taken into 今日, a task with no due date would be stored and then not drawn —
-    // the view is the filter, and "add to today" is what the user asked for. So the
-    // view supplies the due date, as a day rather than an instant, the same shape
-    // the detail's 今天 preset writes (S4).
-    const due = get().view === 'today' ? localDayBounds(Date.now()).start : null;
+    // An archive is not a place to write. The panel hides the quick-add there (D6),
+    // so this is the write path refusing the one thing a "completed" list must not
+    // do: store a task that is neither completed nor anywhere the user was looking.
+    const view = get().view;
+    if (isArchiveView(view)) return false;
 
-    const result = await window.api.task.create({ title, dueAt: due, dueHasTime: false });
+    // Taken into a dated view, a task with no due date would be stored and then not
+    // drawn — the view is the filter, and "add to 明天" is what the user asked for.
+    // So the view supplies the due date, as a day rather than an instant (S4).
+    const result = await window.api.task.create({
+      title,
+      dueAt: defaultDueAt(view),
+      dueHasTime: false,
+    });
     if (!result.ok) {
       set({ tasksStatus: 'error' });
       return false;

@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import type { ReactElement, ReactNode, TransitionEvent } from 'react';
+import type { ReactElement, TransitionEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import type { BootParams } from '@shared/types/app';
+import { isArchiveView } from '@shared/types/app';
 import { PANEL_OPACITY_RANGE } from '@shared/contracts/settings';
 import { applyBootParams } from '../../shared-ui/boot';
 import { changeLocale } from '../../shared-ui/i18n';
@@ -13,11 +14,14 @@ import { TaskList } from './task-list';
 import { usePanelStore } from './store';
 import { usePanelOpacity } from './use-panel-opacity';
 import { usePanelResize } from './use-panel-resize';
+import { ViewSidebar } from './view-sidebar';
+import { VIEW_COPY } from './views';
 
 /**
- * The panel surface: either the Inbox or the open task's detail, never both
- * (M02 D6 — the panel is only 320–640 DIP wide, so the detail replaces the list
- * instead of sitting beside it).
+ * The panel surface: either the current view's list or the open task's detail, never
+ * both (M02 D6 — the panel is only 320–640 DIP wide, so the detail replaces the list
+ * instead of sitting beside it). Which view the list is showing is the sidebar's
+ * choice alone (M03 D1); the header only names the one that is showing.
  */
 export function App({ boot }: { boot: BootParams }): ReactElement {
   const { t } = useTranslation(['common', 'tasks']);
@@ -70,7 +74,7 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
   }, [setPanelState]);
 
   // The app menu's 今日 item (M02 S8) asks for a view rather than moving the window
-  // itself: the view lives here, and the tabs below set the same field. Opening
+  // itself: the view lives in the store, and the sidebar sets the same field. Opening
   // straight onto the list keeps the detail from sitting on top of the view the
   // user just asked for.
   useEffect(() => {
@@ -136,42 +140,42 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
           <>
             <header className="flex items-baseline justify-between gap-2">
               {/*
-                * Two views, as tabs rather than a menu: there are only two, and one
-                * of them is the state the app menu's 今日 item sets (M02 S8).
-                */}
-              <nav
-                className="flex items-baseline gap-3"
-                aria-label={t('tasks:view.switch')}
-                data-field="view-tabs"
+               * The current view's name, spelled out: the sidebar is icon-only, so this
+               * is the one place the panel says which slice of the tasks it is showing.
+               * Switching is the sidebar's job, and its only control: the two tabs that
+               * used to sit here wrote the same `view` field, and two entrances to one
+               * state leave the user unable to tell which of them is the current one.
+               */}
+              <h1
+                className="truncate text-lg font-semibold tracking-tight text-[var(--text-primary)]"
+                data-field="view-title"
                 data-view={view}
               >
-                <ViewTab
-                  field="view-inbox"
-                  active={view === 'inbox'}
-                  onClick={() => void setView('inbox')}
-                >
-                  {t('tasks:inbox.title')}
-                </ViewTab>
-                <ViewTab
-                  field="view-today"
-                  active={view === 'today'}
-                  onClick={() => void setView('today')}
-                >
-                  {t('tasks:view.today')}
-                </ViewTab>
-              </nav>
-              <span className="flex items-baseline gap-1">
-                <span className="text-xs text-[var(--text-muted)]">
-                  {t('tasks:summary.pending', { count: tasks.length })}
+                {t(VIEW_COPY[view].name)}
+              </h1>
+              <span className="flex shrink-0 items-baseline gap-1">
+                <span className="text-xs text-[var(--text-muted)]" data-field="view-count">
+                  {t('tasks:view.count', { count: tasks.length })}
                 </span>
                 <PanelSettings opacity={opacity} onOpacity={setOpacity} />
               </span>
             </header>
 
-            <QuickAdd />
+            <div className="flex min-h-0 flex-1 gap-2">
+              <ViewSidebar />
 
-            <div className="flex-1 overflow-y-auto">
-              <TaskList />
+              <div className="flex min-w-0 flex-1 flex-col gap-3 overflow-hidden">
+                {/*
+                 * An archive has no quick-add (M03 D6): a "to do" typed into 已完成
+                 * would be a row that view is defined not to contain, and the list's
+                 * empty state says where the task belongs instead.
+                 */}
+                {isArchiveView(view) ? null : <QuickAdd />}
+
+                <div className="flex-1 overflow-y-auto">
+                  <TaskList />
+                </div>
+              </div>
             </div>
           </>
         ) : (
@@ -200,38 +204,5 @@ function isTextField(target: EventTarget | null): boolean {
     target instanceof HTMLInputElement ||
     target instanceof HTMLTextAreaElement ||
     target.isContentEditable
-  );
-}
-
-/**
- * One view in the panel's header (M02 S8). A button, not a link: it changes what is
- * already on screen and goes nowhere. The active one carries the emphasis the old
- * heading used to, so the panel keeps a single strong line at its top.
- */
-function ViewTab({
-  field,
-  active,
-  onClick,
-  children,
-}: {
-  field: string;
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}): ReactElement {
-  return (
-    <button
-      type="button"
-      data-field={field}
-      aria-current={active ? 'page' : undefined}
-      onClick={onClick}
-      className={
-        active
-          ? 'text-base font-semibold tracking-tight text-[var(--text-primary)]'
-          : 'text-base font-medium tracking-tight text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-      }
-    >
-      {children}
-    </button>
   );
 }

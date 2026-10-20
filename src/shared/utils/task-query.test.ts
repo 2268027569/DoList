@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { TASK_SORTS } from '@shared/types/task';
+
 import {
   buildTaskQuery,
   TASK_QUERY_DEFAULT_LIMIT,
@@ -65,5 +67,13 @@ describe('buildTaskQuery', () => {
     // A value that got past the type (and past zod) must not reach SQL as text.
     const rogue = { sort: 'DROP TABLE tasks' } as unknown as Parameters<typeof buildTaskQuery>[0];
     expect(buildTaskQuery(rogue).orderBy).toContain('t.sort_order ASC');
+  });
+
+  it('orders a finished row by when it was finished, not by the manual order', () => {
+    // 已完成 reads newest first (M03 D4): `sort_order` is the order the open rows were
+    // dragged into, which says nothing about the order they were completed in, so the
+    // archive sorts on `completed_at` with the manual order only as a tiebreak.
+    expect(TASK_SORTS).toContain('completed');
+    expect(buildTaskQuery({ sort: 'completed' }).orderBy).toContain('t.completed_at DESC');
   });
 });

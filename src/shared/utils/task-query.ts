@@ -16,6 +16,11 @@ export const TASK_QUERY_DEFAULT_LIMIT = 200;
  * Sort whitelist. `due` puts undated tasks last so a dated task is never hidden
  * below them; ties everywhere fall back to `sort_order`, which keeps the manual
  * arrangement the user dragged into place.
+ *
+ * `completed` is the one order that is not about what is still to be done: an
+ * archive reads newest first, so it sorts on `completed_at` — the manual order of
+ * open rows says nothing about the order they were finished in (M03 D4). The
+ * `sort_order` tiebreak keeps rows with no `completed_at` in a stable place.
  */
 const ORDER_BY: Record<string, string> = {
   manual: 't.sort_order ASC, t.created_at ASC',
@@ -23,6 +28,7 @@ const ORDER_BY: Record<string, string> = {
   priority: 't.priority DESC, t.sort_order ASC',
   created: 't.created_at ASC',
   title: 't.title COLLATE NOCASE ASC',
+  completed: 't.completed_at DESC, t.sort_order ASC',
 };
 
 export interface TaskQuerySql {

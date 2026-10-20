@@ -3,6 +3,7 @@ import type { PointerEvent as ReactPointerEvent, ReactElement, ReactNode } from 
 import { useTranslation } from 'react-i18next';
 
 import type { TaskListItem, TaskPriority } from '@shared/types/task';
+import { isArchiveView } from '@shared/types/app';
 import type { DropEdge } from '@shared/utils/sort-order';
 import { type DueChipKind, dueChip } from '@shared/utils/task-due-label';
 import { allSubtasksDone, progressText } from '@shared/utils/task-tree';
@@ -48,8 +49,12 @@ export interface TaskRowProps {
 }
 
 /**
- * One line of the Inbox: a selection box, a done circle, the title, the at-a-glance
- * chips, a grip.
+ * One line of the view the panel is showing: a selection box, a done circle, the
+ * title, the at-a-glance chips, a grip.
+ *
+ * The two archives draw the same line with less of it (M03 D5): no selection box,
+ * because they hold nothing to act on in bulk, and no grip, because `sort_order` is
+ * the order of the work still to be done rather than of the past.
  *
  * Memoized: its props are the task, its position, whether it is selected and the two
  * drag-related fields, all of which stay the same for a row that is neither being
@@ -71,7 +76,13 @@ export const TaskRow = memo(function TaskRow({
   const { t, i18n } = useTranslation('tasks');
   const toggleTask = usePanelStore((state) => state.toggleTask);
   const openTaskDetail = usePanelStore((state) => state.openTaskDetail);
+  const view = usePanelStore((state) => state.view);
   const done = task.status === 'done';
+  // A cancelled row is drawn exactly like a done one — struck through and greyed —
+  // because in the list's terms both mean "not to be done any more" (M03 D5).
+  const finished = done || task.status === 'cancelled';
+  // And in the archives the row drops the controls that are about work in progress.
+  const archived = isArchiveView(view);
   const due = dueChip(task.dueAt, task.dueHasTime, i18n.language);
   const priority = PRIORITY[task.priority];
   // A parent's checklist reads as `2/3`, and turns green once it is complete — the
@@ -86,6 +97,8 @@ export const TaskRow = memo(function TaskRow({
       // handler sits on the row so it answers whichever of the row's controls holds
       // the focus. `aria-keyshortcuts` announces it without drawing anything.
       onKeyDown={(event) => {
+        // An archive holds no work to arrange: there is no order for a move to change.
+        if (archived) return;
         if (!event.altKey) return;
         if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
         event.preventDefault();
@@ -108,34 +121,51 @@ export const TaskRow = memo(function TaskRow({
        * The multi-select box (M02 S7). Hidden until the row is under the pointer —
        * the list is meant to look like a list of tasks — but never hidden while it
        * is checked or focused: a control that cannot be seen cannot be used.
+       *
+       * An archive drops it altogether: a selection is a command waiting to be run
+       * on work that is still open, and there is none of that here (M03 D5).
        */}
-      <button
-        type="button"
-        role="checkbox"
-        aria-checked={selected}
-        aria-label={t(selected ? 'row.deselect' : 'row.select')}
-        data-field="row-select"
-        data-task-id={task.id}
-        onClick={() => onSelect(task.id)}
-        className={`mt-0.5 size-4 shrink-0 rounded border transition-opacity ${
-          selected
-            ? 'border-[var(--accent)] bg-[var(--accent)] opacity-100'
-            : 'border-[var(--border-strong)] opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
-        }`}
-      />
+      {archived ? null : (
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={selected}
+          aria-label={t(selected ? 'row.deselect' : 'row.select')}
+          data-field="row-select"
+          data-task-id={task.id}
+          onClick={() => onSelect(task.id)}
+          className={`mt-0.5 size-4 shrink-0 rounded border transition-opacity ${
+            selected
+              ? 'border-[var(--accent)] bg-[var(--accent)] opacity-100'
+              : 'border-[var(--border-strong)] opacity-0 group-hover:opacity-100 focus-visible:opacity-100'
+          }`}
+        />
+      )}
 
-      <button
-        type="button"
-        role="checkbox"
-        aria-checked={done}
-        aria-label={t(done ? 'row.markUndone' : 'row.markDone')}
-        onClick={() => void toggleTask(task.id, !done)}
-        className={`mt-0.5 size-4 shrink-0 rounded-full border transition-colors ${
-          done
-            ? 'border-[var(--status-done)] bg-[var(--status-done)]'
-            : 'border-[var(--border-strong)] hover:border-[var(--accent)]'
-        }`}
-      />
+      {/*
+       * The done circle. 已完成 keeps it: ticking one of its rows is how a task is
+       * taken back to `todo` (M03 D5). 已取消 does not — a cancelled row is not
+       * reopened by a tick but by editing it, and a circle that did something other
+       * than what it says would be the list's one lying control.
+       */}
+      {view === 'cancelled' ? null : (
+        <button
+          type="button"
+          role="checkbox"
+          aria-checked={done}
+          aria-label={t(done ? 'row.markUndone' : 'row.markDone')}
+          // Named for the harness, which ticks a row in 已完成 and then asserts the
+          // row left the list (§13).
+          data-field="row-toggle"
+          data-task-id={task.id}
+          onClick={() => void toggleTask(task.id, !done)}
+          className={`mt-0.5 size-4 shrink-0 rounded-full border transition-colors ${
+            done
+              ? 'border-[var(--status-done)] bg-[var(--status-done)]'
+              : 'border-[var(--border-strong)] hover:border-[var(--accent)]'
+          }`}
+        />
+      )}
 
       <div className="min-w-0 flex-1">
         {/*
@@ -152,7 +182,7 @@ export const TaskRow = memo(function TaskRow({
           data-field="task-title"
           data-task-id={task.id}
           className={`block w-full text-left text-sm break-words ${
-            done ? 'text-[var(--text-muted)] line-through' : 'text-[var(--text-primary)]'
+            finished ? 'text-[var(--text-muted)] line-through' : 'text-[var(--text-primary)]'
           }`}
         >
           {task.title}
@@ -187,20 +217,26 @@ export const TaskRow = memo(function TaskRow({
        * Hidden until the row is under the pointer, but never hidden from the
        * keyboard — a control that cannot be seen when focused is a control that
        * cannot be used.
+       *
+       * Gone altogether in an archive: the order a reorder writes is the manual order
+       * of the work still to be done, and the archives are ordered by when rows were
+       * finished (M03 D4) — a drag there would rearrange something no one will read.
        */}
-      <button
-        type="button"
-        aria-label={t('row.dragHandle')}
-        data-field="task-grip"
-        data-task-id={task.id}
-        onPointerDown={(event) => onGripPointerDown(task.id, index, event)}
-        onPointerMove={onGripPointerMove}
-        onPointerUp={onGripPointerUp}
-        onPointerCancel={onGripPointerUp}
-        className="mt-0.5 shrink-0 cursor-grab touch-none select-none rounded px-1 text-xs leading-4 text-[var(--text-muted)] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 active:cursor-grabbing"
-      >
-        ⋮⋮
-      </button>
+      {archived ? null : (
+        <button
+          type="button"
+          aria-label={t('row.dragHandle')}
+          data-field="task-grip"
+          data-task-id={task.id}
+          onPointerDown={(event) => onGripPointerDown(task.id, index, event)}
+          onPointerMove={onGripPointerMove}
+          onPointerUp={onGripPointerUp}
+          onPointerCancel={onGripPointerUp}
+          className="mt-0.5 shrink-0 cursor-grab touch-none select-none rounded px-1 text-xs leading-4 text-[var(--text-muted)] opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100 active:cursor-grabbing"
+        >
+          ⋮⋮
+        </button>
+      )}
     </li>
   );
 });
