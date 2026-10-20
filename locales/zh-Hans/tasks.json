@@ -38,6 +38,7 @@
   "detail.back": "返回列表",
   "detail.title": "标题",
   "detail.notes": "备注",
+  "detail.notesPlaceholder": "添加备注",
   "detail.due": "截止日期",
   "detail.hasTime": "含时刻",
   "detail.time": "截止时刻",

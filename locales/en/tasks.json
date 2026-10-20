@@ -38,6 +38,7 @@
   "detail.back": "Back to the list",
   "detail.title": "Title",
   "detail.notes": "Notes",
+  "detail.notesPlaceholder": "Add a note",
   "detail.due": "Due date",
   "detail.hasTime": "Include a time",
   "detail.time": "Due time",

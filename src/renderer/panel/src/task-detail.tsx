@@ -345,8 +345,9 @@ export function TaskDetail({
            * own; the cap keeps one runaway note from burying every field under it.
            */}
           <textarea
-            rows={3}
+            rows={2}
             value={notes}
+            placeholder={t('detail.notesPlaceholder')}
             data-field="detail-notes"
             onChange={(event) => setNotes(event.target.value)}
             onBlur={commitNotes}
