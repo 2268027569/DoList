@@ -441,7 +441,8 @@ export function TaskDetail({ task }: { task: TaskWithTags }): ReactElement {
             ))}
             <Choice
               field="detail-repeat-custom"
-              active={repeatOpen}
+              active={task.repeatRule !== null && presetFor(task.repeatRule) === null}
+              open={repeatOpen}
               dashed
               // Typos survive here: the field is left as the user typed it when the
               // write is rejected, so the correction is a fix rather than a retype.
@@ -1000,6 +1001,7 @@ function Field({ label, children }: { label: string; children: ReactNode }): Rea
 function Choice({
   field,
   active = false,
+  open = false,
   dot,
   dashed = false,
   onClick,
@@ -1007,6 +1009,8 @@ function Choice({
 }: {
   field: string;
   active?: boolean;
+  /** An open input rather than a chosen value: it says "expanded", never "selected". */
+  open?: boolean;
   dot?: string;
   dashed?: boolean;
   onClick: () => void;
@@ -1024,8 +1028,16 @@ function Choice({
         active
           ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text-primary)]'
           : dashed
-            ? 'border-dashed border-[var(--border-strong)] bg-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-            : 'border-transparent bg-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-surface-muted)] hover:text-[var(--text-primary)]'
+            ? open
+              ? 'border-dashed border-[var(--border-strong)] bg-transparent text-[var(--text-primary)]'
+              : 'border-dashed border-[var(--border-default)] bg-transparent text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
+            : /*
+               * Hover brightens the label and nothing else. It used to lay down the
+               * same fill a chosen chip wears, so a pointer resting on one row of
+               * choices made *two* of them look taken — the row read as multi-select.
+               * Now the accent edge and tint belong to the chosen chip alone.
+               */
+              'border-transparent bg-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
       }`}
     >
       {dot !== undefined && (

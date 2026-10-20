@@ -3,6 +3,7 @@ import type { TaskChangedPayload } from '@shared/contracts/task';
 
 import { isSmokeEnabled, smokeRecord } from '../platform/smoke';
 import { pushMarkerState } from '../windows/marker';
+import { getDetailWindow } from '../windows/detail';
 import { getPanelWindow } from '../windows/panel';
 import { currentMarkerState } from './marker-state';
 import { rescheduleReminders } from './scheduler';
@@ -15,9 +16,14 @@ import { rescheduleReminders } from './scheduler';
  * can change; and the panel re-fetches its open query rather than patching a
  * local mirror (M02 D4).
  *
- * Only the panel is told. The marker entry does not subscribe to task changes,
- * and sending it a message it ignores would wake a window that is meant to be
- * idle.
+ * Two surfaces are told: the panel and the detail window. The detail is a renderer of
+ * its own with its own copy of the row, and it re-reads that row on this event — so a
+ * chip pressed in the form is drawn as the stored value by the same write. Sending it
+ * to the panel alone left the form showing whatever it had when it was opened: the
+ * chosen mark never moved, which is what "the style does not switch" looked like.
+ *
+ * The marker entry does not subscribe to task changes, and sending it a message it
+ * ignores would wake a window that is meant to be idle.
  */
 export function notifyTasksChanged(change: TaskChangedPayload): void {
   pushMarkerState();
@@ -38,6 +44,11 @@ export function notifyTasksChanged(change: TaskChangedPayload): void {
   }
 
   const panel = getPanelWindow();
-  if (panel === null || panel.isDestroyed()) return;
-  panel.webContents.send(IPC.event.taskChanged, change);
+  if (panel !== null && !panel.isDestroyed()) {
+    panel.webContents.send(IPC.event.taskChanged, change);
+  }
+  // The detail holds one row, and it is the row this write changed — whether the write
+  // came from the form itself or from the list beside it.
+  const detail = getDetailWindow();
+  if (detail !== null) detail.webContents.send(IPC.event.taskChanged, change);
 }

@@ -1309,6 +1309,24 @@ async function main() {
       fail(`the priority is ${rows[0].priority}, expected 3`);
     }
 
+    // The form's own mark, not just the stored value: the write announcement re-reads the
+    // row, and the chips compare against that read. A ring that never moves is exactly the
+    // "style does not switch" report, so it is asserted here rather than left to the eye.
+    let pressed = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      pressed = await evaluate(
+        detail,
+        `document.querySelector('[data-field="detail-priority-high"]')?.getAttribute('aria-pressed') ?? null`,
+      );
+      if (pressed === 'true') break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (pressed === 'true') {
+      pass('the detail moved its chosen mark onto High');
+    } else {
+      fail(`the detail still marks another priority as chosen (high aria-pressed=${String(pressed)})`);
+    }
+
     // --- phase 4b: Escape puts the window away, the list stays where it was ---
     // Pressed on the detail's own page: it is the detail that listens for Escape now,
     // and the panel's page does not hold the focus while the detail is up.

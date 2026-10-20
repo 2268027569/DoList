@@ -110,6 +110,15 @@ export function showDetailWindow(taskId: string): void {
 }
 
 /**
+ * The open detail, if any. At most one window, so at most one answer — the same
+ * discipline `getPanelWindow` follows for the list.
+ */
+export function getDetailWindow(): BrowserWindow | null {
+  const entry = [...open.values()][0];
+  return entry === undefined || entry.isDestroyed() ? null : entry;
+}
+
+/**
  * Takes the detail down — its close button, Escape in the renderer, or the panel going
  * away underneath it. It takes no task id on purpose: whatever is open is what has lost
  * its footing, and asking the caller to name it would only make the two places that

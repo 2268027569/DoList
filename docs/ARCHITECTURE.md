@@ -415,7 +415,7 @@ export const taskCreateInput = z.object({
 
 - **`undefined` 与 `null` 语义不同**：`undefined` = 不动该字段，`null` = 清空该列。补丁因此在「每次改动即时保存」下可以只带一个字段（M02 D9、§5.2 的 `TaskPatch`）。
 - 与早先草案的两处差异：`listId` / `parentId` 用**有界标识符**而非 `z.string().uuid()`（id 由本项目的 UUID v7 生成，不接受任意 uuid 版本）；`tags` 传的是**标签名**而非标签 id（`tags.name` 已是 UNIQUE，主进程按名去重创建，M02 §4）。
-- 任务通道：`task:query` / `task:create` / `task:update` / `task:delete` / `task:restore` / `task:reorder`，事件 `event:task-changed`。一次写入恰好一次通知，通知只发面板窗口（`services/task-events.ts`）。
+- 任务通道：`task:query` / `task:create` / `task:update` / `task:delete` / `task:restore` / `task:reorder`，事件 `event:task-changed`。一次写入恰好一次通知，通知发给**面板与详情窗**（`services/task-events.ts`）——详情窗是自己的一份行拷贝，它靠这个事件重读那一行；只发面板时表单会一直停在打开那一刻的旧值，点另一个 chip 选中标记不移动（"样式不切换"）。标记窗口不订阅任务事件，不发给它
 - 附件通道：`attachment:list` / `attachment:add` / `attachment:remove` / `attachment:open` / `attachment:thumbnail`（M03 S3）。
 - 提醒通道（M04）：渲染层→主进程只有两条，`reminder:dismiss`（`reminderDismissInput`：用户看过了）与 `reminder:done`（`reminderDoneInput`：id + taskId，把任务勾成完成并在同一条命令里应答实例）。主进程→渲染层的事件只有一个：`event:task-focus`（toast 被点击要打开的那个任务，载荷 `TaskFocusPayload`）。渲染层既不查询也不排期提醒——主进程说什么时候到，弹窗按它自己窗口的载荷（`ReminderDuePayload` 经 `loadRenderer` 的附加查询串传入）画出来，以及回答"我答了哪一条"。
 - 每个 handler 的第一行是 `schema.safeParse(payload)`，**主进程不信渲染层的任何输入**；注册器与各域 handler 共用 `ipc/validate.ts` 的 `invalid()`，保证拒绝形状与日志一致。
