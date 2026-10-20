@@ -17,6 +17,7 @@ import { createTray, destroyTray } from './platform/tray';
 import { broadcastTheme } from './services/broadcast';
 import { startReminderScheduler, stopReminderScheduler } from './services/scheduler';
 import { appSettings, resolveBoot } from './services/settings';
+import { reconcileReminders } from './services/tasks';
 import { createMarkerWindow } from './windows/marker';
 import { createPanelWindow, expandPanel } from './windows/panel';
 
@@ -90,10 +91,16 @@ async function start(): Promise<void> {
 
   // Reminders last, and after the windows: the scheduler's delivery opens the panel,
   // so it must not announce anything into a process that has no panel to open (§5.3).
-  // It reads the instances the task writes left behind, so its own start-up is also
-  // where a reminder missed while the app was closed is dealt with.
+  //
+  // The reconcile comes first: instances are derived data and only a write re-derives
+  // them, so this is where a reminder the previous run failed to leave behind is
+  // rebuilt. Put back before `start`, an instance this recovers is announced by the same
+  // launch pass that deals with one missed while the app was closed.
   // The offset is the reminder harness asking for the moment now rather than later
   // (platform/smoke.ts), so a run does not have to sit and wait for it.
+  const rebuilt = reconcileReminders(Date.now());
+  if (rebuilt > 0) log('rebuilt reminder instances a write had left behind', { tasks: rebuilt });
+
   const clockOffset = smokeClockOffsetMs();
   startReminderScheduler({
     deliver: deliverReminder,

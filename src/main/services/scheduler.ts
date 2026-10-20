@@ -1,5 +1,6 @@
 import type { Reminder } from '@shared/types/reminder';
 import type { TaskWithTags } from '@shared/types/task';
+import { REMINDER_GRACE_MS } from '@shared/utils/reminder';
 
 import {
   dismissPendingBefore,
@@ -29,16 +30,6 @@ import { readTask } from './tasks';
  * rather than delivered late. A rule about "never twice" therefore does not need to
  * be remembered in this module — it is already a row.
  */
-
-/**
- * How late a missed instance is still worth announcing at start-up.
- *
- * The app is not a daemon: a reminder may have come due while it was closed. A few
- * hours late is still the right thing to say. Much later is not — the task is already
- * drawn as overdue in its list, and a burst of notifications about a week the user has
- * long since finished would train them to ignore all of them.
- */
-const MISSED_GRACE_MS = 6 * 60 * 60 * 1000;
 
 /**
  * Longest delay one timer can carry. `setTimeout` takes a signed 32-bit millisecond
@@ -116,7 +107,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // Old business first: an instance missed by more than the grace never gets
       // delivered, so it must not be picked up by the pass below.
       const at = now();
-      dismissPendingBefore(at - MISSED_GRACE_MS);
+      dismissPendingBefore(at - REMINDER_GRACE_MS);
       fireDue();
       plan();
     },

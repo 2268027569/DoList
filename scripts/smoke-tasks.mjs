@@ -2073,8 +2073,9 @@ async function main() {
     await waitForEvent('detail-opened', 5_000, remindOpenSince);
 
     // The day after tomorrow, so that whatever the hour of the run the *arming* below
-    // lands in the future — a reminder is only armed for a moment still to come, and a
-    // due date of tomorrow would make a one-day lead land in the past at some hours.
+    // lands in the future and cannot go off on its own before the harness is watching.
+    // A due date of tomorrow with a one-day lead would already be behind the wall clock
+    // at some hours, and the instance would speak the moment it was written.
     const dueDay = new Date(dayStart(2));
     const isoDue =
       `${dueDay.getFullYear()}-${String(dueDay.getMonth() + 1).padStart(2, '0')}-` +

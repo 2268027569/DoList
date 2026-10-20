@@ -13,8 +13,12 @@ import type {
   TaskWithTags,
 } from '@shared/types/task';
 import { nextOccurrence } from '@shared/utils/recurrence';
-import { fireAtFor } from '@shared/utils/reminder';
-import { clearPendingReminders, replacePendingReminder } from '../db/repositories/reminders';
+import { armableFireAt } from '@shared/utils/reminder';
+import {
+  clearPendingReminders,
+  replacePendingReminder,
+  tasksMissingReminderInstance,
+} from '../db/repositories/reminders';
 import { tagsOfTasks } from '../db/repositories/tags';
 import {
   createTask,
@@ -337,13 +341,37 @@ function scheduleNextOccurrence(task: Task, now: number): Task | null {
  * waiting, and its instance is dropped rather than deferred: announcing a task the
  * user has finished is noise, and there is no later moment at which it becomes
  * correct.
+ *
+ * Whether the moment is still worth arming is `armableFireAt`'s call, not this one's:
+ * a lead that has just elapsed still gets an instance (so setting "5 minutes before
+ * 18:50" at 18:47 is not silently dropped — it speaks at once), while a moment further
+ * back than the grace is refused.
  */
 function syncReminder(task: Task, now: number): void {
   if (task.deletedAt !== null || task.status === 'done' || task.status === 'cancelled') {
     clearPendingReminders([task.id]);
     return;
   }
-  replacePendingReminder(task.id, fireAtFor(task.dueAt, task.remindLeadMin), now);
+  replacePendingReminder(task.id, armableFireAt(task.dueAt, task.remindLeadMin, now), now);
+}
+
+/**
+ * Rebuilds the reminder projection at launch: every open task whose moment has no
+ * instance gets one (§5.3).
+ *
+ * Instances are derived data, but a write is the only thing that re-derives them — so a
+ * process that died between writing the task and writing the instance would leave behind
+ * a reminder that is silently never going to arrive, with the task row looking perfectly
+ * fine. This is the pass that closes that gap: it asks for the tasks whose current moment
+ * has nothing standing for it yet, and re-derives each one. A moment that has already
+ * been announced is not among them, which is what keeps this from speaking twice.
+ */
+export function reconcileReminders(now: number): number {
+  const awaiting = tasksMissingReminderInstance();
+  for (const task of awaiting) {
+    replacePendingReminder(task.id, armableFireAt(task.dueAt, task.remindLeadMin, now), now);
+  }
+  return awaiting.length;
 }
 
 /** Undo entries for a write that read the rows it changed (a delete or a restore). */

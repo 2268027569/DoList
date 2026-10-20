@@ -44,8 +44,7 @@ export function listRemindersForTask(taskId: string): Reminder[] {
 }
 
 /**
- * Makes `fireAt` the task's one waiting instance, or clears it when `fireAt` is
- * `null`.
+ * Makes `fireAt` the task's one waiting instance, or clears it when `fireAt` is `null`.
  *
  * Deliberately a replace rather than an insert: a task has at most one reminder
  * *waiting*, and re-deriving it after the due date or the lead changed must not
@@ -53,11 +52,15 @@ export function listRemindersForTask(taskId: string): Reminder[] {
  * just moved away from. Instances that already fired are left alone: they are the
  * record of what was said, and re-reading the task later must not rewrite history.
  *
- * A moment already past is not armed: a reminder exists to speak *before* the
- * deadline, so arming one the user just walked past would announce something already
- * overdue the instant they set it. Reminders missed while the app was closed are a
- * different case — they are rows that were armed earlier and are still `pending`,
- * and the launch pass in `services/scheduler.ts` is what decides about those.
+ * A moment that has already gone by is written down as it is, not refused. Whether it is
+ * still worth saying needs the grace rule, which the caller applies first (`armableFireAt`
+ * in `shared/utils/reminder.ts`); by the time this is called, the moment is simply the
+ * moment. A waiting instance at a past time is ordinary — the scheduler arms a zero-delay
+ * timer for it and speaks on the next tick.
+ *
+ * One moment is announced once. A moment that already has an instance which is not
+ * waiting has been spoken or answered, so re-deriving the task after an unrelated edit
+ * (a renamed title) leaves it alone rather than resurrecting the reminder.
  */
 export function replacePendingReminder(
   taskId: string,
@@ -67,7 +70,16 @@ export function replacePendingReminder(
   const db = getDatabase();
   const run = db.transaction((): string | null => {
     db.prepare(`DELETE FROM reminders WHERE task_id = ? AND state = 'pending'`).run(taskId);
-    if (fireAt === null || fireAt <= now) return null;
+    if (fireAt === null) return null;
+
+    const spoken = db
+      .prepare(
+        `SELECT 1 FROM reminders
+          WHERE task_id = ? AND fire_at = ? AND state <> 'pending'
+          LIMIT 1`,
+      )
+      .get(taskId, fireAt);
+    if (spoken !== undefined) return null;
 
     const id = newId(now);
     db.prepare(
@@ -94,6 +106,44 @@ export function clearPendingReminders(taskIds: readonly string[]): number {
   return getDatabase()
     .prepare(`DELETE FROM reminders WHERE state = 'pending' AND task_id IN (${placeholders})`)
     .run(...unique).changes;
+}
+
+/** An open task whose reminder is due, as the reconciliation pass needs it. */
+export interface TaskAwaitingReminder {
+  id: string;
+  dueAt: number;
+  remindLeadMin: number;
+}
+
+/**
+ * Open tasks whose reminder moment has no instance of its own.
+ *
+ * An instance is derived data — the task row and its lead decide the moment — so this is
+ * the query that lets the projection be rebuilt. Whatever a write failed to leave behind
+ * (a process that died between the two writes, or a build whose rule was different) shows
+ * up here, and the pass that consumes it re-derives it.
+ *
+ * A moment that already has an instance of *any* state is not returned: one that is
+ * waiting belongs to the scheduler, and one that has spoken must not be said again.
+ * `fire_at` is computed the way `fireAtFor` computes it, which is what makes the lookup
+ * land on the same moment the write would have written.
+ */
+export function tasksMissingReminderInstance(): TaskAwaitingReminder[] {
+  return getDatabase()
+    .prepare(
+      `SELECT t.id AS id, t.due_at AS dueAt, t.remind_lead_min AS remindLeadMin
+         FROM tasks t
+        WHERE t.deleted_at IS NULL
+          AND t.status NOT IN ('done', 'cancelled')
+          AND t.due_at IS NOT NULL
+          AND t.remind_lead_min IS NOT NULL
+          AND NOT EXISTS (
+                SELECT 1 FROM reminders r
+                 WHERE r.task_id = t.id
+                   AND r.fire_at = t.due_at - t.remind_lead_min * 60000
+              )`,
+    )
+    .all() as TaskAwaitingReminder[];
 }
 
 /** The earliest waiting fire time, or `null` when nothing is waiting. */

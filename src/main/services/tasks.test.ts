@@ -1,8 +1,10 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { TaskWithTags } from '@shared/types/task';
+import { REMINDER_GRACE_MS } from '@shared/utils/reminder';
 
 import { withTempDatabase } from '../db/test-db';
+import { listRemindersForTask, setReminderState } from '../db/repositories/reminders';
 import {
   bulkTasks,
   createTaskFromInput,
@@ -17,6 +19,8 @@ import {
 import { clearUndo } from './undo';
 
 const NOW = new Date(2026, 4, 12, 10, 0, 0).getTime();
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
 
 // The stack is one per process, so it would otherwise carry entries from the test
 // before into the next one — which is exactly what the app never does, since each
@@ -549,6 +553,71 @@ describe('the invariants the service inherits from the repository', () => {
       expect(() =>
         createTaskFromInput({ title: 'child', parentId: parent.id }, NOW + 2),
       ).toThrow(/recycle bin/);
+    });
+  });
+});
+
+describe('the waiting reminder a task write leaves behind', () => {
+  it('arms a lead that has just elapsed, so a reminder set in the moment is not lost', () => {
+    withTempDatabase(() => {
+      // "Remind me five minutes before 18:50", finished at 18:47: the moment it names is
+      // already behind the user. The instance is still written — waiting at a time
+      // already past, which is exactly what makes the scheduler speak at once instead of
+      // never. Dropping it here is how a reminder set this way disappears without a word.
+      const dueAt = NOW + 3 * MINUTE;
+      const { task } = createTaskFromInput(
+        { title: 'x', dueAt, dueHasTime: true, remindLeadMin: 5 },
+        NOW,
+      );
+
+      const waiting = listRemindersForTask(task.id);
+      expect(waiting.map((row) => row.fireAt)).toEqual([dueAt - 5 * MINUTE]);
+      expect(waiting[0]?.state).toBe('pending');
+      expect(waiting[0]?.fireAt).toBeLessThan(NOW);
+    });
+  });
+
+  it('refuses a lead that elapsed longer ago than the grace', () => {
+    withTempDatabase(() => {
+      const dueAt = NOW - REMINDER_GRACE_MS - 2 * HOUR;
+      const { task } = createTaskFromInput(
+        { title: 'x', dueAt, dueHasTime: true, remindLeadMin: 30 },
+        NOW,
+      );
+
+      // Nothing useful is left to say about it: the task already reads as overdue.
+      expect(listRemindersForTask(task.id)).toEqual([]);
+    });
+  });
+
+  it('leaves a moment it already announced alone when the task is edited', () => {
+    withTempDatabase(() => {
+      const { task } = createTaskFromInput(
+        { title: 'x', dueAt: NOW + HOUR, dueHasTime: true, remindLeadMin: 30 },
+        NOW,
+      );
+      const armed = listRemindersForTask(task.id)[0]!;
+      setReminderState(armed.id, 'fired');
+
+      // Renaming the task does not move the moment the reminder was due, so the edit must
+      // not queue a second instance and tell the user again.
+      updateTaskFromPatch(task.id, { title: 'renamed' }, NOW + MINUTE);
+
+      expect(listRemindersForTask(task.id).map((row) => row.id)).toEqual([armed.id]);
+    });
+  });
+
+  it('drops the wait when the task is finished', () => {
+    withTempDatabase(() => {
+      const { task } = createTaskFromInput(
+        { title: 'x', dueAt: NOW + HOUR, dueHasTime: true, remindLeadMin: 30 },
+        NOW,
+      );
+      expect(listRemindersForTask(task.id)).toHaveLength(1);
+
+      updateTaskFromPatch(task.id, { status: 'done' }, NOW + MINUTE);
+
+      expect(listRemindersForTask(task.id)).toEqual([]);
     });
   });
 });

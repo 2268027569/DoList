@@ -55,21 +55,61 @@ describe('replacePendingReminder', () => {
     });
   });
 
-  it('does not arm a moment that has already passed', () => {
+  it('writes down a moment that has already passed rather than refusing it', () => {
     withTempDatabase(() => {
       const task = createTask({ title: 'x' }, NOW);
 
-      // A lead longer than the time left before the deadline lands in the past. Arming
-      // it would announce something already overdue the instant it was set.
-      expect(replacePendingReminder(task.id, NOW - MINUTE, NOW)).toBeNull();
-      expect(listRemindersForTask(task.id)).toEqual([]);
+      // Whether a past moment is still worth saying is the grace rule's call, made by
+      // the caller before it gets here. This layer only records what it is handed, and a
+      // waiting instance at a past time is ordinary — the scheduler arms it with a delay
+      // of zero and speaks on the next tick.
+      const reminder = replacePendingReminder(task.id, NOW - MINUTE, NOW);
+
+      expect(reminder?.fireAt).toBe(NOW - MINUTE);
+      expect(reminder?.state).toBe('pending');
     });
   });
 
-  it('treats the present moment as past, since there is nothing left to lead', () => {
+  it('keeps a moment that is exactly now waiting, to speak at once', () => {
     withTempDatabase(() => {
       const task = createTask({ title: 'x' }, NOW);
-      expect(replacePendingReminder(task.id, NOW, NOW)).toBeNull();
+      expect(replacePendingReminder(task.id, NOW, NOW)?.fireAt).toBe(NOW);
+    });
+  });
+
+  it('does not re-arm a moment that has already been announced', () => {
+    withTempDatabase(() => {
+      const task = createTask({ title: 'x' }, NOW);
+      const fired = replacePendingReminder(task.id, NOW + 30 * MINUTE, NOW)!;
+      setReminderState(fired.id, 'fired');
+
+      // The user renames the title a minute later. The reminder's moment has not moved,
+      // so re-deriving it must not resurrect an announcement the user has been given —
+      // and the same holds for one they answered.
+      expect(replacePendingReminder(task.id, NOW + 30 * MINUTE, NOW + MINUTE)).toBeNull();
+      expect(listRemindersForTask(task.id).map((row) => row.id)).toEqual([fired.id]);
+
+      const dismissed = replacePendingReminder(task.id, NOW + 90 * MINUTE, NOW + MINUTE)!;
+      setReminderState(dismissed.id, 'dismissed');
+      expect(replacePendingReminder(task.id, NOW + 90 * MINUTE, NOW + 2 * MINUTE)).toBeNull();
+    });
+  });
+
+  it('arms a moved moment even when an earlier one was announced', () => {
+    withTempDatabase(() => {
+      const task = createTask({ title: 'x' }, NOW);
+      const first = replacePendingReminder(task.id, NOW + 30 * MINUTE, NOW)!;
+      setReminderState(first.id, 'dismissed');
+
+      // A different moment is a different reminder: the user moved the deadline, so this
+      // is something new to say rather than a repeat of what was already answered.
+      const second = replacePendingReminder(task.id, NOW + 60 * MINUTE, NOW + MINUTE);
+
+      expect(second?.id).not.toBe(first.id);
+      expect(listRemindersForTask(task.id).map((row) => [row.fireAt, row.state])).toEqual([
+        [NOW + 30 * MINUTE, 'dismissed'],
+        [NOW + 60 * MINUTE, 'pending'],
+      ]);
     });
   });
 
