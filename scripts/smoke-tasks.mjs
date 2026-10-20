@@ -1451,6 +1451,25 @@ async function main() {
       fail(`the caret moved to "${caretAfterSubtask}" after adding a subtask`);
     }
 
+    // A task due on one day is a one-off: the repeat choices stay folded away until the
+    // switch on the field's own label row is thrown, the same shape the reminder takes.
+    const presetsHidden = await evaluate(
+      form,
+      `document.querySelector('[data-field="detail-repeat-daily"]') === null`,
+    );
+    if (presetsHidden === true) {
+      pass('a one-off task draws no repeat presets until the switch is turned on');
+    } else {
+      fail('the repeat presets were drawn on a task that does not repeat');
+    }
+
+    await gotoField(form, 'detail-repeat-toggle');
+    await pressKey(form, 'Enter');
+    if (!(await waitForFieldPresent(form, 'detail-repeat-daily'))) {
+      fail('the repeat choices never appeared after turning repeat on');
+      return;
+    }
+
     await gotoField(form, 'detail-repeat-daily');
     const repeatSet = await pressKeyAndWait(form, 'Enter');
     rows = readTasks();
@@ -2332,11 +2351,11 @@ async function main() {
       fail('a deadline without a lead armed a reminder anyway');
     }
 
-    // Turning the reminder on is one button; the lead choices only exist once it is on.
-    // The form no longer draws six unpressed presets, which read as a multi-select.
-    // Turning it on writes nothing — the chosen lead is what arms anything, so the
-    // harness waits for the choices rather than for a write.
-    await gotoField(remindForm, 'detail-remind-enable');
+    // Turning the reminder on is the switch on the field's label row; the lead choices
+    // only exist once it is on. The form no longer draws six unpressed presets, which
+    // read as a multi-select. Turning it on writes nothing — the chosen lead is what arms
+    // anything, so the harness waits for the choices rather than for a write.
+    await gotoField(remindForm, 'detail-remind-toggle');
     await pressKey(remindForm, 'Enter');
     if (!(await waitForFieldPresent(remindForm, 'detail-remind-30'))) {
       fail('the reminder choices never appeared after turning the reminder on');

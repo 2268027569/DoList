@@ -171,6 +171,14 @@ export function TaskDetail({ task }: { task: TaskWithTags }): ReactElement {
     task.repeatRule !== null && presetFor(task.repeatRule) === null,
   );
   /**
+   * Whether the repeat choices are on screen. A task due on one day is a one-off, and a
+   * one-off should not be drawn as six repeat presets with none of them taken — that is
+   * the same misreading the reminder produced. Like the reminder, turning it on writes
+   * nothing: a rule written on the way past would schedule occurrences the user never
+   * asked for. Picking a preset (or a valid custom rule) is the write.
+   */
+  const [repeatOn, setRepeatOn] = useState(task.repeatRule !== null);
+  /**
    * Whether the reminder's lead choices are on screen. It follows the stored lead once
    * one exists; the only thing it adds is the moment between "turned on" and "picked a
    * time", where the choices are shown but nothing has been written yet — a default lead
@@ -296,7 +304,21 @@ export function TaskDetail({ task }: { task: TaskWithTags }): ReactElement {
   const choosePreset = (rule: string): void => {
     setRepeatOpen(false);
     setCustomRepeat('');
-    void save({ repeatRule: task.repeatRule === rule ? null : rule });
+    const clearing = task.repeatRule === rule;
+    setRepeatOn(!clearing);
+    void save({ repeatRule: clearing ? null : rule });
+  };
+
+  /**
+   * The switch itself: on shows the choices, off clears whatever rule there was. Turning
+   * it on is only a local open — see the note on `repeatOn`.
+   */
+  const toggleRepeat = (on: boolean): void => {
+    setRepeatOn(on);
+    if (on) return;
+    setRepeatOpen(false);
+    setCustomRepeat('');
+    if (task.repeatRule !== null) void save({ repeatRule: null });
   };
 
   /**
@@ -308,6 +330,7 @@ export function TaskDetail({ task }: { task: TaskWithTags }): ReactElement {
   const commitCustomRepeat = (): void => {
     const rule = customRepeat.trim();
     if (rule === '' && task.repeatRule === null) return;
+    if (rule === '') setRepeatOn(false);
     void save({ repeatRule: rule === '' ? null : rule });
   };
 
@@ -427,75 +450,106 @@ export function TaskDetail({ task }: { task: TaskWithTags }): ReactElement {
           </div>
         </Field>
 
-        <Field label={t('detail.repeat.label')}>
-          <div className="flex flex-wrap gap-1.5">
-            {REPEAT_PRESETS.map((preset) => (
-              <Choice
-                key={preset.key}
-                field={`detail-repeat-${preset.key}`}
-                active={task.repeatRule === preset.rule}
-                onClick={() => choosePreset(preset.rule)}
-              >
-                {t(`detail.repeat.${preset.key}`)}
-              </Choice>
-            ))}
-            <Choice
-              field="detail-repeat-custom"
-              active={task.repeatRule !== null && presetFor(task.repeatRule) === null}
-              open={repeatOpen}
-              dashed
-              // Typos survive here: the field is left as the user typed it when the
-              // write is rejected, so the correction is a fix rather than a retype.
-              onClick={() => setRepeatOpen((open) => !open)}
-            >
-              {t('detail.repeat.custom')}
-            </Choice>
-          </div>
-
-          {repeatOpen && (
-            <input
-              type="text"
-              value={customRepeat}
-              placeholder={t('detail.repeat.customPlaceholder')}
-              aria-label={t('detail.repeat.custom')}
-              data-field="detail-repeat-rule"
-              onChange={(event) => setCustomRepeat(event.target.value)}
-              onBlur={commitCustomRepeat}
-              onKeyDown={(event) => {
-                if (event.key !== 'Enter') return;
-                event.preventDefault();
-                commitCustomRepeat();
-              }}
-              className={`${INPUT} mt-2 w-full font-mono text-[11px]`}
+        <Field
+          label={t('detail.repeat.label')}
+          action={
+            <Switch
+              field="detail-repeat-toggle"
+              label={t('detail.repeat.label')}
+              checked={repeatOn}
+              onChange={toggleRepeat}
             />
-          )}
-
+          }
+        >
           {/*
-           * The mode is only meaningful once there is a rule to count, so it stays
-           * out of the way until then.
+           * A task due on one day is simply a one-off, and the presets stay folded away
+           * until the switch above is thrown — the same shape the reminder takes below.
            */}
-          {task.repeatRule !== null && (
-            <div className="mt-2 flex flex-wrap gap-1.5">
-              {REPEAT_MODES.map((mode) => (
+          {repeatOn && (
+            <>
+              <div className="flex flex-wrap gap-1.5">
+                {REPEAT_PRESETS.map((preset) => (
+                  <Choice
+                    key={preset.key}
+                    field={`detail-repeat-${preset.key}`}
+                    active={task.repeatRule === preset.rule}
+                    onClick={() => choosePreset(preset.rule)}
+                  >
+                    {t(`detail.repeat.${preset.key}`)}
+                  </Choice>
+                ))}
                 <Choice
-                  key={mode}
-                  field={`detail-repeat-mode-${mode}`}
-                  active={(task.repeatMode ?? 'fixed') === mode}
-                  onClick={() => void save({ repeatMode: mode })}
+                  field="detail-repeat-custom"
+                  active={task.repeatRule !== null && presetFor(task.repeatRule) === null}
+                  open={repeatOpen}
+                  dashed
+                  // Typos survive here: the field is left as the user typed it when the
+                  // write is rejected, so the correction is a fix rather than a retype.
+                  onClick={() => setRepeatOpen((open) => !open)}
                 >
-                  {t(REPEAT_MODE_LABEL[mode])}
+                  {t('detail.repeat.custom')}
                 </Choice>
-              ))}
-            </div>
+              </div>
+
+              {repeatOpen && (
+                <input
+                  type="text"
+                  value={customRepeat}
+                  placeholder={t('detail.repeat.customPlaceholder')}
+                  aria-label={t('detail.repeat.custom')}
+                  data-field="detail-repeat-rule"
+                  onChange={(event) => setCustomRepeat(event.target.value)}
+                  onBlur={commitCustomRepeat}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return;
+                    event.preventDefault();
+                    commitCustomRepeat();
+                  }}
+                  className={`${INPUT} mt-2 w-full font-mono text-[11px]`}
+                />
+              )}
+
+              {/*
+               * The mode is only meaningful once there is a rule to count, so it stays
+               * out of the way until then.
+               */}
+              {task.repeatRule !== null && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {REPEAT_MODES.map((mode) => (
+                    <Choice
+                      key={mode}
+                      field={`detail-repeat-mode-${mode}`}
+                      active={(task.repeatMode ?? 'fixed') === mode}
+                      onClick={() => void save({ repeatMode: mode })}
+                    >
+                      {t(REPEAT_MODE_LABEL[mode])}
+                    </Choice>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </Field>
 
-        <Field label={t('detail.remind')}>
+        <Field
+          label={t('detail.remind')}
+          action={
+            <Switch
+              field="detail-remind-toggle"
+              label={t('detail.remind')}
+              checked={remindOpen}
+              onChange={(on) => {
+                setRemindOpen(on);
+                if (!on) chooseRemind(null);
+              }}
+            />
+          }
+        >
           {/*
            * A reminder the task does not have is a single thing to turn on, not six
            * choices with none of them taken (M04): showing the presets unpressed made the
            * section read as always-on but unset. Once it *is* set, the choices appear —
-           * and turning it off restores the one button.
+           * and the switch above is what turns it back off.
            */}
           {remindOpen ? (
             <>
@@ -543,20 +597,9 @@ export function TaskDetail({ task }: { task: TaskWithTags }): ReactElement {
                 <span className="shrink-0 text-[11px] text-[var(--text-muted)]">
                   {t('detail.remindUnit')}
                 </span>
-                <span className="ml-auto">
-                  <Choice field="detail-remind-off" dashed onClick={() => chooseRemind(null)}>
-                    {t('detail.remindOff')}
-                  </Choice>
-                </span>
               </div>
             </>
-          ) : (
-            <div>
-              <Choice field="detail-remind-enable" onClick={() => setRemindOpen(true)}>
-                {t('detail.remindEnable')}
-              </Choice>
-            </div>
-          )}
+          ) : null}
         </Field>
       </Group>
 
@@ -976,13 +1019,75 @@ function Group({
  * The label is a caption on the control rather than a second title, which is why it is
  * quieter and smaller than the group heading above it — three sizes of text, three
  * levels of importance: the task, its sections, and its field names.
+ *
+ * `action` is the one control that belongs *to the field* rather than inside it — the
+ * repeat and reminder switches, which decide whether there is anything below them.
+ * Sitting on the label row keeps them from being read as another answer in the row of
+ * choices.
  */
-function Field({ label, children }: { label: string; children: ReactNode }): ReactElement {
+function Field({
+  label,
+  action,
+  children,
+}: {
+  label: string;
+  action?: ReactNode;
+  children?: ReactNode;
+}): ReactElement {
   return (
     <div className="flex flex-col">
-      <span className="mb-1.5 text-[11px] font-medium text-[var(--text-secondary)]">{label}</span>
+      <div className={`flex items-center justify-between ${children ? 'mb-1.5' : ''}`}>
+        <span className="text-[11px] font-medium text-[var(--text-secondary)]">{label}</span>
+        {action}
+      </div>
       {children}
     </div>
+  );
+}
+
+/**
+ * An on/off switch. The repeat and the reminder are not questions with five answers
+ * until they are on — a task can simply be a one-off, and a task can simply not remind —
+ * so the choice of *whether* is drawn as the one control that can be off, and the
+ * answers only appear once it is on.
+ *
+ * `role="switch"` rather than `aria-pressed`: screen readers announce the state, and the
+ * smoke harness can read `aria-checked` to tell which way it was thrown.
+ */
+function Switch({
+  field,
+  label,
+  checked,
+  onChange,
+}: {
+  field: string;
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}): ReactElement {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      data-field={field}
+      onClick={() => onChange(!checked)}
+      className={`relative flex h-4 w-7 shrink-0 items-center rounded-full border transition-colors ${
+        checked
+          ? 'border-[var(--accent)] bg-[var(--accent)]'
+          : 'border-[var(--border-strong)] bg-transparent'
+      }`}
+    >
+      <span
+        aria-hidden="true"
+        className={`absolute top-[2px] size-2.5 rounded-full transition-transform ${
+          checked
+            ? 'translate-x-[14px] bg-[var(--accent-on)]'
+            : 'translate-x-[2px] bg-[var(--border-strong)]'
+        }`}
+      />
+    </button>
   );
 }
 
@@ -990,9 +1095,9 @@ function Field({ label, children }: { label: string; children: ReactNode }): Rea
  * A pressed switch: a plain button with `aria-pressed`, so tab order is the order
  * written. `dot` is the colour swatch that lets one be found by eye among several.
  *
- * Unpressed switches carry no edge — they sit on the same muted surface the text
- * fields use, so a row of them reads as a set of answers to one question rather than as
- * a toolbar of buttons. The pressed one is the only one with a border and a tint.
+ * Unpressed switches carry no edge and no fill — hover lifts the label only. A fill on
+ * every option made a row look like a multi-select with all of it ticked, so the pressed
+ * one is now the *only* one with a border and a tint.
  *
  * `dashed` marks the one chip in a row that opens something instead of choosing a value
  * (`detail.repeat.custom`): it needs to not look like the seventh preset, and a dashed
