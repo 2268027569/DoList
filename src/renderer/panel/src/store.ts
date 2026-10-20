@@ -4,6 +4,7 @@ import type { TaskBulkOp, TaskPatchInput, TaskQueryInput } from '@shared/contrac
 import { isArchiveView } from '@shared/types/app';
 import type { BootParams, PanelState, PanelView } from '@shared/types/app';
 import type { Attachment, ReorderScope, TaskListItem, TaskWithTags } from '@shared/types/task';
+import { isImageName } from '@shared/utils/attachment';
 import { localDayBounds } from '@shared/utils/day';
 import { moveWithin } from '@shared/utils/sort-order';
 
@@ -133,10 +134,20 @@ interface PanelStore {
   subtasks: TaskWithTags[];
 
   /**
-   * The open task's attachments (M02 S7). References to files the user picked
-   * through the OS dialog: the rows say where a file is, and the file stays there.
+   * The open task's attachments (M02 S7, M03 S3). Copies the app made of the files
+   * the user picked through the OS dialog: the row says where the copy went, and the
+   * file travels with it — folder sync moves this directory and nothing else.
    */
   attachments: Attachment[];
+
+  /**
+   * The previews for the image attachments above, keyed by attachment id (M03 S3).
+   * Fetched after the rows, not with them: a thumbnail is a data URL — the only large
+   * payload of the two — and a row that is not an image is never asked for one. An
+   * absent id is how the panel knows the preview is not coming, so it draws the file
+   * row instead of a card.
+   */
+  thumbnails: Record<string, string>;
 
   /**
    * The rows the user multi-selected in the list (M02 S7). Ids rather than rows:
@@ -194,11 +205,11 @@ interface PanelStore {
    */
   undo: () => Promise<boolean>;
 
-  /** Re-reads the open task's attachments. */
+  /** Re-reads the open task's attachments and their image previews. */
   refreshAttachments: () => Promise<void>;
-  /** Opens the OS file picker and stores whatever it returned. */
+  /** Opens the OS file picker and copies whatever it returned. */
   pickAttachments: () => Promise<void>;
-  /** Drops one attachment row; the file itself is left alone. */
+  /** Drops one attachment row and the copy it points at. */
   removeAttachment: (id: string) => Promise<void>;
   /** Opens one attachment with whatever handler the OS has for it. */
   openAttachment: (id: string) => Promise<void>;
@@ -224,6 +235,7 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
   openTask: null,
   subtasks: [],
   attachments: [],
+  thumbnails: {},
   selectedIds: [],
   saveFailed: false,
 
@@ -312,6 +324,7 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
       openTask: null,
       subtasks: [],
       attachments: [],
+      thumbnails: {},
       saveFailed: false,
     });
     const result = await window.api.task.get(id);
@@ -335,6 +348,7 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
       openTask: null,
       subtasks: [],
       attachments: [],
+      thumbnails: {},
       saveFailed: false,
     }),
 
@@ -390,6 +404,7 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
       openTask: null,
       subtasks: [],
       attachments: [],
+      thumbnails: {},
       saveFailed: false,
     });
   },
@@ -460,12 +475,15 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
   refreshAttachments: async () => {
     const id = get().openTaskId;
     if (id === null) {
-      set({ attachments: [] });
+      set({ attachments: [], thumbnails: {} });
       return;
     }
     const result = await window.api.attachment.list(id);
     if (!result.ok) return;
-    set({ attachments: result.data });
+    // Rows first, previews second: a non-image never needs one, and a preview is the
+    // only large payload of the two, so the row list stays as cheap as it was (S3).
+    const rows = result.data;
+    set({ attachments: rows, thumbnails: await readThumbnails(rows) });
   },
 
   pickAttachments: async () => {
@@ -478,7 +496,7 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
       return;
     }
     // A cancelled picker answers with an empty list, and the re-read is what draws
-    // whatever was stored, so both cases take the same path.
+    // whatever was copied, so both cases take the same path.
     await get().refreshAttachments();
   },
 
@@ -501,3 +519,22 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
   setBoot: (boot) => set({ boot }),
   setPanelState: (panelState) => set({ panelState }),
 }));
+
+/**
+ * The previews for whichever of `rows` are images (M03 S3).
+ *
+ * Asked for in one pass and stored as one map, so the detail re-renders once rather
+ * than once per image. A row whose preview does not come back — the file is gone, or
+ * the platform has no thumbnail provider for it — is left out of the map, which is
+ * exactly how the panel learns to draw a file row for it instead of an empty card.
+ */
+async function readThumbnails(rows: readonly Attachment[]): Promise<Record<string, string>> {
+  const images = rows.filter((row) => isImageName(row.name ?? row.path));
+  const entries = await Promise.all(
+    images.map(async (row): Promise<[string, string] | null> => {
+      const result = await window.api.attachment.thumbnail(row.id);
+      return result.ok && result.data !== null ? [row.id, result.data] : null;
+    }),
+  );
+  return Object.fromEntries(entries.filter((entry) => entry !== null));
+}

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 
 import type { RepeatMode, TaskPriority, TaskStatus, TaskWithTags } from '@shared/types/task';
 import { REPEAT_MODES, TASK_PRIORITIES, TASK_STATUSES } from '@shared/types/task';
+import { isImageName } from '@shared/utils/attachment';
 import {
   dueToday,
   dueTomorrow,
@@ -33,11 +34,31 @@ const PRIORITY_FIELD: Record<TaskPriority, string> = {
   3: 'high',
 };
 
+/**
+ * The dot each priority switch carries. A switch that says "Low" in words still has
+ * to be found by eye in a row of five, and the colour is the same one the list's own
+ * priority chip uses, so the two screens agree without either reading the other.
+ * Written as whole class strings because that is what the Tailwind scanner sees.
+ */
+const PRIORITY_DOT: Record<TaskPriority, string> = {
+  0: 'bg-[var(--text-muted)]',
+  1: 'bg-[var(--priority-low)]',
+  2: 'bg-[var(--priority-medium)]',
+  3: 'bg-[var(--priority-high)]',
+};
+
 const STATUS_LABEL: Record<TaskStatus, string> = {
   todo: 'status.todo',
   doing: 'status.doing',
   done: 'status.done',
   cancelled: 'status.cancelled',
+};
+
+const STATUS_DOT: Record<TaskStatus, string> = {
+  todo: 'bg-[var(--text-muted)]',
+  doing: 'bg-[var(--priority-low)]',
+  done: 'bg-[var(--status-done)]',
+  cancelled: 'bg-[var(--border-strong)]',
 };
 
 /** The two ways a repeat can count, named for the field and for the label key. */
@@ -47,11 +68,17 @@ const REPEAT_MODE_LABEL: Record<RepeatMode, string> = {
 };
 
 const INPUT =
-  'w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-muted)] px-2.5 py-1.5 text-sm text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]';
+  'w-full rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-muted)] px-2.5 py-1.5 text-[13px] text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]';
 
 /**
  * The task detail, a full-screen replacement of the list (M02 D6): the panel is
  * 320–640 DIP wide, where a list beside anything readable is no longer readable.
+ *
+ * It is laid out as a column of bordered cards, one per field, inside a single
+ * scroller whose scrollbar is hidden (`.detail-scroll`): a form this long has to be
+ * scrollable, and the OS's bright track through a dark card is the one thing the
+ * screen cannot be seen past. The wheel still works, and every control is reachable
+ * from the keyboard — which is also how the smoke harness reaches them.
  *
  * Saving is immediate (M02 D9) — there is no save button and no dirty flag, which
  * is also what makes the panel's collapse-on-blur safe: whatever was typed is
@@ -80,6 +107,7 @@ export function TaskDetail({
   const addSubtask = usePanelStore((state) => state.addSubtask);
   const removeSubtask = usePanelStore((state) => state.removeSubtask);
   const attachments = usePanelStore((state) => state.attachments);
+  const thumbnails = usePanelStore((state) => state.thumbnails);
   const pickAttachments = usePanelStore((state) => state.pickAttachments);
   const removeAttachment = usePanelStore((state) => state.removeAttachment);
   const openAttachment = usePanelStore((state) => state.openAttachment);
@@ -117,6 +145,14 @@ export function TaskDetail({
    * title is edited right after, so reading it again later would report the edit.
    */
   const [opened] = useState(() => ({ id: task.id, title: task.title }));
+
+  /**
+   * Images draw as preview cards and everything else as file rows (S3). Split from
+   * the one list rather than asked of the main process twice: the rule is the shared
+   * `isImageName`, the same one that decides which rows are worth a thumbnail.
+   */
+  const imageAttachments = attachments.filter((row) => isImageName(row.name ?? row.path));
+  const fileAttachments = attachments.filter((row) => !isImageName(row.name ?? row.path));
 
   useEffect(() => {
     // The harness cannot click, so this is the one moment it needs to know the
@@ -254,28 +290,37 @@ export function TaskDetail({
   });
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3">
-      <header className="flex items-center gap-1.5">
+    <div className="flex h-full min-h-0 flex-col">
+      {/*
+       * Outside the scroller, so going back is always one click away however far down
+       * the form the user has read.
+       */}
+      <header className="flex shrink-0 items-center gap-2 pb-2.5">
         <button
           type="button"
           onClick={onBack}
           aria-label={t('detail.back')}
           data-field="detail-back"
-          className="rounded-md px-1.5 py-0.5 text-sm text-[var(--text-muted)] hover:bg-[var(--bg-surface-muted)] hover:text-[var(--text-primary)]"
+          className="grid size-6 shrink-0 place-items-center rounded-lg text-[13px] text-[var(--text-muted)] transition-colors hover:bg-[var(--bg-surface-muted)] hover:text-[var(--text-primary)]"
         >
           ←
         </button>
-        <h1 className="text-base font-semibold tracking-tight text-[var(--text-primary)]">
+        <h1 className="truncate text-[13px] font-semibold tracking-tight text-[var(--text-primary)]">
           {t('detail.heading')}
         </h1>
         {saveFailed && (
-          <span className="ml-auto text-[11px] text-[var(--status-overdue)]">
+          <span className="ml-auto shrink-0 rounded-full bg-[var(--bg-surface-muted)] px-2 py-0.5 text-[11px] text-[var(--status-overdue)]">
             {t('detail.saveFailed')}
           </span>
         )}
       </header>
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-0.5">
+      <div className="detail-scroll flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pb-1">
+        {/*
+         * The title is the page, not a field of it: it is what the user opened this
+         * screen to read, so it is drawn at reading size and commits like every other
+         * text control rather than getting a form's worth of chrome.
+         */}
         <input
           ref={titleField}
           autoFocus
@@ -290,17 +335,22 @@ export function TaskDetail({
             event.preventDefault();
             commitTitle();
           }}
-          className={`${INPUT} font-medium`}
+          className="w-full shrink-0 rounded-lg border-b-2 border-transparent bg-transparent px-0.5 py-1 text-lg font-semibold tracking-tight text-[var(--text-primary)] outline-none placeholder:text-[var(--text-muted)] focus:border-[var(--accent)]"
         />
 
         <Field label={t('detail.notes')}>
+          {/*
+           * `field-sizing-content` grows the box with what is typed, so a long note is
+           * read in full without a drag handle to find and without a scrollbar of its
+           * own; the cap keeps one runaway note from burying every field under it.
+           */}
           <textarea
             rows={3}
             value={notes}
             data-field="detail-notes"
             onChange={(event) => setNotes(event.target.value)}
             onBlur={commitNotes}
-            className={`${INPUT} resize-y`}
+            className={`${INPUT} field-sizing-content max-h-48 resize-none`}
           />
         </Field>
 
@@ -313,17 +363,8 @@ export function TaskDetail({
               data-field="detail-due-date"
               onChange={(event) => setDueDate(event.target.value)}
               onBlur={() => commitDue()}
-              className={`${INPUT} w-auto`}
+              className={`${INPUT} w-auto min-w-0 flex-1`}
             />
-            <label className="flex items-center gap-1 text-xs text-[var(--text-muted)]">
-              <input
-                type="checkbox"
-                checked={hasTime}
-                data-field="detail-has-time"
-                onChange={(event) => toggleHasTime(event.target.checked)}
-              />
-              {t('detail.hasTime')}
-            </label>
             {hasTime && (
               <input
                 type="time"
@@ -335,6 +376,16 @@ export function TaskDetail({
                 className={`${INPUT} w-auto`}
               />
             )}
+            <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-[11px] text-[var(--text-muted)]">
+              <input
+                type="checkbox"
+                checked={hasTime}
+                data-field="detail-has-time"
+                onChange={(event) => toggleHasTime(event.target.checked)}
+                className="size-3.5 accent-[var(--accent)]"
+              />
+              {t('detail.hasTime')}
+            </label>
           </div>
           <div className="mt-1.5 flex flex-wrap gap-1.5">
             <Choice field="detail-due-today" onClick={() => applyPreset(dueToday())}>
@@ -436,6 +487,7 @@ export function TaskDetail({
                 key={level}
                 field={`detail-priority-${PRIORITY_FIELD[level]}`}
                 active={task.priority === level}
+                dot={PRIORITY_DOT[level]}
                 onClick={() => void saveOpenTask({ priority: level })}
               >
                 {t(PRIORITY_LABEL[level])}
@@ -451,6 +503,7 @@ export function TaskDetail({
                 key={value}
                 field={`detail-status-${value}`}
                 active={task.status === value}
+                dot={STATUS_DOT[value]}
                 onClick={() => void saveOpenTask({ status: value })}
               >
                 {t(STATUS_LABEL[value])}
@@ -460,25 +513,27 @@ export function TaskDetail({
         </Field>
 
         <Field label={t('detail.tags')}>
-          <div className="flex flex-wrap items-center gap-1.5">
-            {task.tags.map((tag) => (
-              <span
-                key={tag}
-                className="flex items-center gap-1 rounded bg-[var(--bg-surface-muted)] px-1.5 py-0.5 text-[11px] leading-4 text-[var(--text-muted)]"
-              >
-                {`#${tag}`}
-                <button
-                  type="button"
-                  aria-label={t('detail.tags.remove', { name: tag })}
-                  data-field="detail-tag-remove"
-                  onClick={() => removeTag(tag)}
-                  className="text-[var(--text-muted)] hover:text-[var(--status-overdue)]"
+          {task.tags.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {task.tags.map((tag) => (
+                <span
+                  key={tag}
+                  className="flex items-center gap-1 rounded-full bg-[var(--bg-surface-muted)] px-2 py-0.5 text-[11px] leading-4 text-[var(--text-secondary)]"
                 >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
+                  {`#${tag}`}
+                  <button
+                    type="button"
+                    aria-label={t('detail.tags.remove', { name: tag })}
+                    data-field="detail-tag-remove"
+                    onClick={() => removeTag(tag)}
+                    className="text-[var(--text-muted)] transition-colors hover:text-[var(--status-overdue)]"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
           <input
             type="text"
             value={tagDraft}
@@ -490,7 +545,7 @@ export function TaskDetail({
               event.preventDefault();
               addTag();
             }}
-            className={`${INPUT} mt-1.5`}
+            className={`${INPUT} ${task.tags.length > 0 ? 'mt-1.5' : ''}`}
           />
         </Field>
 
@@ -501,48 +556,50 @@ export function TaskDetail({
               : `${t('detail.subtasks')} · ${subtaskProgress}`
           }
         >
-          <ul className="flex flex-col gap-0.5">
-            {subtasks.map((subtask) => {
-              const done = subtask.status === 'done';
-              return (
-                <li key={subtask.id} className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    role="checkbox"
-                    aria-checked={done}
-                    aria-label={t(done ? 'row.markUndone' : 'row.markDone')}
-                    data-field="detail-subtask-toggle"
-                    data-task-id={subtask.id}
-                    onClick={() => void toggleTask(subtask.id, !done)}
-                    className={`size-3.5 shrink-0 rounded-full border transition-colors ${
-                      done
-                        ? 'border-[var(--status-done)] bg-[var(--status-done)]'
-                        : 'border-[var(--border-strong)] hover:border-[var(--accent)]'
-                    }`}
-                  />
-                  <span
-                    className={`min-w-0 flex-1 text-xs break-words ${
-                      done
-                        ? 'text-[var(--text-muted)] line-through'
-                        : 'text-[var(--text-primary)]'
-                    }`}
-                  >
-                    {subtask.title}
-                  </span>
-                  <button
-                    type="button"
-                    aria-label={t('detail.subtasks.remove', { title: subtask.title })}
-                    data-field="detail-subtask-remove"
-                    data-task-id={subtask.id}
-                    onClick={() => void removeSubtask(subtask.id)}
-                    className="shrink-0 rounded px-1 text-xs text-[var(--text-muted)] hover:text-[var(--status-overdue)]"
-                  >
-                    ×
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
+          {subtasks.length > 0 && (
+            <ul className="flex flex-col gap-1">
+              {subtasks.map((subtask) => {
+                const done = subtask.status === 'done';
+                return (
+                  <li key={subtask.id} className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      role="checkbox"
+                      aria-checked={done}
+                      aria-label={t(done ? 'row.markUndone' : 'row.markDone')}
+                      data-field="detail-subtask-toggle"
+                      data-task-id={subtask.id}
+                      onClick={() => void toggleTask(subtask.id, !done)}
+                      className={`size-4 shrink-0 rounded-full border transition-colors ${
+                        done
+                          ? 'border-[var(--status-done)] bg-[var(--status-done)]'
+                          : 'border-[var(--border-strong)] hover:border-[var(--accent)]'
+                      }`}
+                    />
+                    <span
+                      className={`min-w-0 flex-1 text-xs break-words ${
+                        done
+                          ? 'text-[var(--text-muted)] line-through'
+                          : 'text-[var(--text-primary)]'
+                      }`}
+                    >
+                      {subtask.title}
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={t('detail.subtasks.remove', { title: subtask.title })}
+                      data-field="detail-subtask-remove"
+                      data-task-id={subtask.id}
+                      onClick={() => void removeSubtask(subtask.id)}
+                      className="shrink-0 rounded px-1 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--status-overdue)]"
+                    >
+                      ×
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
           {/*
            * Below the list rather than above it: adding one does not push the field
            * the caret is in down the screen, so a run of them can be typed without
@@ -561,52 +618,120 @@ export function TaskDetail({
               event.preventDefault();
               addSubtaskFromDraft();
             }}
-            className={`${INPUT} mt-1.5`}
+            className={`${INPUT} ${subtasks.length > 0 ? 'mt-1.5' : ''}`}
           />
         </Field>
 
         <Field label={t('detail.attachments')}>
-          <ul className="flex flex-col gap-0.5">
-            {attachments.map((attachment) => (
-              <li key={attachment.id} className="flex items-center gap-2">
-                {/*
-                 * The whole name is a button, because opening the file is the one
-                 * thing an attachment is for; `title` and `data-path` carry where it
-                 * actually lives, which is the part too long to draw.
-                 */}
-                <button
-                  type="button"
-                  data-field="detail-attachment-open"
-                  data-attachment-id={attachment.id}
-                  data-path={attachment.path}
-                  title={attachment.path}
-                  onClick={() => void openAttachment(attachment.id)}
-                  className="min-w-0 flex-1 truncate text-left text-xs text-[var(--text-primary)] hover:underline"
+          {/*
+           * An image gets a card wide enough to recognise what it is, because that is
+           * the whole of what a preview is for; the row keeps its name for anything
+           * else, where a thumbnail would say nothing the name does not. Both open the
+           * same way — a click, and the OS shows the copy (S7).
+           */}
+          {imageAttachments.length > 0 && (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(84px,1fr))] gap-1.5">
+              {imageAttachments.map((attachment) => (
+                <div
+                  key={attachment.id}
+                  className="group relative aspect-square overflow-hidden rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface-muted)]"
                 >
-                  {attachment.name ?? attachment.path}
-                </button>
-                {attachment.size !== null && (
-                  <span className="shrink-0 text-[11px] text-[var(--text-muted)]">
-                    {sizeLabel(attachment.size)}
+                  <button
+                    type="button"
+                    data-field="detail-attachment-open"
+                    data-attachment-id={attachment.id}
+                    data-path={attachment.path}
+                    title={attachment.path}
+                    onClick={() => void openAttachment(attachment.id)}
+                    className="grid h-full w-full place-items-center"
+                  >
+                    {thumbnails[attachment.id] === undefined ? (
+                      // No preview — the platform had none for this file. The name is
+                      // still the control's name, so a screen reader reads what the
+                      // filename would have said.
+                      <span className="flex flex-col items-center gap-1 text-[var(--text-muted)]">
+                        <ImageGlyph />
+                        <span className="sr-only">{attachment.name ?? attachment.path}</span>
+                      </span>
+                    ) : (
+                      <img
+                        src={thumbnails[attachment.id]}
+                        alt={attachment.name ?? ''}
+                        data-thumbnail={attachment.id}
+                        className="h-full w-full object-cover"
+                      />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={t('detail.attachments.remove', {
+                      name: attachment.name ?? attachment.path,
+                    })}
+                    data-field="detail-attachment-remove"
+                    data-attachment-id={attachment.id}
+                    // The row and the copy go; the file the user picked does not. The
+                    // service refuses to unlink anything outside the app's own
+                    // attachments directory (S3).
+                    onClick={() => void removeAttachment(attachment.id)}
+                    className="absolute right-0.5 top-0.5 grid size-5 place-items-center rounded-full bg-[var(--bg-surface)] text-[13px] leading-none text-[var(--text-muted)] transition-colors hover:text-[var(--status-overdue)]"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {fileAttachments.length > 0 && (
+            <ul className={`flex flex-col gap-1 ${imageAttachments.length > 0 ? 'mt-1.5' : ''}`}>
+              {fileAttachments.map((attachment) => (
+                <li key={attachment.id} className="flex items-center gap-2">
+                  {/*
+                   * The extension, not a file icon: it is the one thing about a file
+                   * this narrow that says what opening it will bring up, and it needs
+                   * no artwork to say it.
+                   */}
+                  <span className="w-9 shrink-0 truncate rounded bg-[var(--bg-surface-muted)] px-1 py-0.5 text-center text-[10px] font-medium uppercase text-[var(--text-muted)]">
+                    {extensionOf(attachment.name ?? attachment.path)}
                   </span>
-                )}
-                <button
-                  type="button"
-                  aria-label={t('detail.attachments.remove', {
-                    name: attachment.name ?? attachment.path,
-                  })}
-                  data-field="detail-attachment-remove"
-                  data-attachment-id={attachment.id}
-                  // The row goes; the file does not. The app never owns the file, and
-                  // a click in a task list is no place to delete a document (S7).
-                  onClick={() => void removeAttachment(attachment.id)}
-                  className="shrink-0 rounded px-1 text-xs text-[var(--text-muted)] hover:text-[var(--status-overdue)]"
-                >
-                  ×
-                </button>
-              </li>
-            ))}
-          </ul>
+                  {/*
+                   * The whole name is a button, because opening the file is the one
+                   * thing an attachment is for; `title` and `data-path` carry where it
+                   * actually lives, which is the part too long to draw.
+                   */}
+                  <button
+                    type="button"
+                    data-field="detail-attachment-open"
+                    data-attachment-id={attachment.id}
+                    data-path={attachment.path}
+                    title={attachment.path}
+                    onClick={() => void openAttachment(attachment.id)}
+                    className="min-w-0 flex-1 truncate text-left text-xs text-[var(--text-primary)] hover:underline"
+                  >
+                    {attachment.name ?? attachment.path}
+                  </button>
+                  {attachment.size !== null && (
+                    <span className="shrink-0 text-[11px] text-[var(--text-muted)]">
+                      {sizeLabel(attachment.size)}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    aria-label={t('detail.attachments.remove', {
+                      name: attachment.name ?? attachment.path,
+                    })}
+                    data-field="detail-attachment-remove"
+                    data-attachment-id={attachment.id}
+                    onClick={() => void removeAttachment(attachment.id)}
+                    className="shrink-0 rounded px-1 text-xs text-[var(--text-muted)] transition-colors hover:text-[var(--status-overdue)]"
+                  >
+                    ×
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+
           {/*
            * A button rather than a drop zone: the file is chosen in the OS picker the
            * main process opens, so there is no path for a page to hand over and no
@@ -616,9 +741,11 @@ export function TaskDetail({
             type="button"
             data-field="detail-attachment-add"
             onClick={() => void pickAttachments()}
-            className="mt-1.5 self-start rounded-md border border-[var(--border-default)] px-2 py-1 text-xs text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]"
+            className={`self-start rounded-lg border border-dashed border-[var(--border-strong)] px-2.5 py-1.5 text-[11px] text-[var(--text-muted)] transition-colors hover:border-[var(--accent)] hover:text-[var(--text-primary)] ${
+              attachments.length > 0 ? 'mt-1.5' : ''
+            }`}
           >
-            {t('detail.attachments.add')}
+            {`+ ${t('detail.attachments.add')}`}
           </button>
         </Field>
 
@@ -631,7 +758,7 @@ export function TaskDetail({
           type="button"
           data-field="detail-delete"
           onClick={() => void deleteOpenTask()}
-          className="mt-1 self-start rounded-md border border-[var(--border-default)] px-2 py-1 text-xs text-[var(--status-overdue)] hover:bg-[var(--bg-surface-muted)]"
+          className="self-start rounded-lg border border-[var(--border-default)] px-2.5 py-1.5 text-[11px] text-[var(--status-overdue)] transition-colors hover:border-[var(--status-overdue)] hover:bg-[var(--bg-surface-muted)]"
         >
           {t('detail.delete')}
         </button>
@@ -655,24 +782,62 @@ function sizeLabel(size: number): string {
   return unit === 0 ? `${value} ${units[unit]}` : `${value.toFixed(1)} ${units[unit]}`;
 }
 
-function Field({ label, children }: { label: string; children: ReactNode }): ReactElement {
+/** The badge a file row shows. A name with no extension reads as no type at all. */
+function extensionOf(name: string): string {
+  const dot = name.lastIndexOf('.');
+  if (dot < 0 || dot === name.length - 1) return 'file';
+  return name.slice(dot + 1);
+}
+
+/** The placeholder an image card draws when the platform could not preview it. */
+function ImageGlyph(): ReactElement {
   return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-xs font-medium text-[var(--text-muted)]">{label}</span>
-      {children}
-    </div>
+    <svg
+      viewBox="0 0 24 24"
+      aria-hidden="true"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      className="size-5 opacity-70"
+    >
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <circle cx="8.5" cy="9.5" r="1.5" />
+      <path d="M21 16l-4.5-4.5L6 20" />
+    </svg>
   );
 }
 
-/** A pressed switch: a plain button with `aria-pressed`, so tab order is the order written. */
+/**
+ * One field of the form: a label and its control, framed together.
+ *
+ * The frame is what groups the screen — a form of eleven equal-weight blocks read as
+ * one long list, and the eye had nothing to say where one ended. It is drawn with the
+ * border only, no fill: the controls inside fill themselves with the muted surface,
+ * which is the contrast that makes them read as controls rather than as text.
+ */
+function Field({ label, children }: { label: string; children: ReactNode }): ReactElement {
+  return (
+    <section className="flex flex-col rounded-xl border border-[var(--border-default)] p-2.5">
+      <span className="mb-1.5 text-[11px] font-medium text-[var(--text-muted)]">{label}</span>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * A pressed switch: a plain button with `aria-pressed`, so tab order is the order
+ * written. `dot` is the colour swatch that lets one be found by eye among several.
+ */
 function Choice({
   field,
   active = false,
+  dot,
   onClick,
   children,
 }: {
   field: string;
   active?: boolean;
+  dot?: string;
   onClick: () => void;
   children: ReactNode;
 }): ReactElement {
@@ -684,12 +849,15 @@ function Choice({
       // top of this file.
       data-field={field}
       onClick={onClick}
-      className={`rounded-md border px-2 py-1 text-xs transition-colors ${
+      className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors ${
         active
-          ? 'border-[var(--accent)] bg-[var(--bg-surface-muted)] text-[var(--text-primary)]'
+          ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text-primary)]'
           : 'border-[var(--border-default)] text-[var(--text-muted)] hover:border-[var(--border-strong)] hover:text-[var(--text-primary)]'
       }`}
     >
+      {dot !== undefined && (
+        <span className={`size-1.5 shrink-0 rounded-full ${dot}`} aria-hidden="true" />
+      )}
       {children}
     </button>
   );

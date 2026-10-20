@@ -126,11 +126,13 @@ export const taskBulkInput = z.object({
   ]),
 });
 
-/** An attachment keeps its file where it is; only the path is stored (S7). */
+/** An attachment is a copy inside the app's directory; the row stores where it went. */
 export const attachmentListInput = z.object({ taskId: identifier });
 export const attachmentAddInput = z.object({ taskId: identifier });
 export const attachmentRemoveInput = z.object({ id: identifier });
 export const attachmentOpenInput = z.object({ id: identifier });
+/** Answers with a data URL, or with `null` when the file has no preview (M03 S3). */
+export const attachmentThumbnailInput = z.object({ id: identifier });
 
 export const taskQueryInput = z.object({
   listId: identifier.nullable().optional(),

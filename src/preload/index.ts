@@ -82,16 +82,19 @@ const api = {
     undo: () => invoke<TaskUndoResult | null>(IPC.task.undo),
   },
   attachment: {
-    /** The references hung on one task, in the order they were added. */
+    /** The copies hung on one task, in the order they were added. */
     list: (taskId: string) => invoke<Attachment[]>(IPC.attachment.list, { taskId }),
     /**
-     * Opens the OS file picker on the main side and stores what it returned. The
-     * renderer never sends a path: it asks for a pick, and gets rows back (S7).
+     * Opens the OS file picker on the main side and copies what it returned into the
+     * app's own directory. The renderer never sends a path: it asks for a pick, and
+     * gets rows back (S7).
      */
     add: (taskId: string) => invoke<Attachment[]>(IPC.attachment.add, { taskId }),
-    /** Removing the row never removes the file itself. */
+    /** Removing the row deletes the copy the app made, and only ever that one. */
     remove: (id: string) => invoke<{ removed: boolean }>(IPC.attachment.remove, { id }),
     open: (id: string) => invoke<null>(IPC.attachment.open, { id }),
+    /** An image's preview as a data URL, or `null` when it has none (M03 S3). */
+    thumbnail: (id: string) => invoke<string | null>(IPC.attachment.thumbnail, { id }),
   },
   i18n: {
     setLocale: (locale: string) => invoke<string>(IPC.i18n.setLocale, { locale }),

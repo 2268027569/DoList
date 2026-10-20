@@ -6,6 +6,58 @@
 @import './base.css';
 
 /*
+ * The OS draws its own chrome — scrollbar tracks, the date and time pickers, the
+ * popup behind a number field — in whichever colour scheme this names. Without it a
+ * dark card is interrupted by bright white native controls, which is exactly what
+ * the tokens above cannot reach: they colour what *the panel* draws, and these are
+ * not the panel's to draw (docs/ARCHITECTURE.md §7).
+ */
+:root[data-mode='light'] {
+  color-scheme: light;
+}
+
+:root[data-mode='dark'] {
+  color-scheme: dark;
+}
+
+/*
+ * A scrollbar the theme can live with: thin, and drawn from tokens so it belongs to
+ * the surface it sits on. It is the fallback everywhere — the one scroller that must
+ * not show a bar at all opts out below.
+ */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+/*
+ * The detail page's scroller (§M03 S3). A form that long has to scroll, but the bar
+ * itself is the one thing on the screen that belongs to the OS rather than to the
+ * theme, so it is hidden rather than themed: the wheel, the arrow keys and Tab all
+ * still move the view.
+ */
+.detail-scroll {
+  scrollbar-width: none;
+}
+
+.detail-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+/*
  * Expand / collapse primitive. Only opacity and transform animate, so the
  * compositor does the work and the main process never animates window bounds
  * (docs/ARCHITECTURE.md §7, §9.1).

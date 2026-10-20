@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { isSmokeEnabled } from './smoke';
 
@@ -31,4 +31,17 @@ export function databaseFile(): string {
 
 export function logsDir(): string {
   return join(userDataDir(), 'logs');
+}
+
+/**
+ * Where a task's attachments are copied (M03 S3).
+ *
+ * Beside the database rather than at a fixed userData path, so the folder-sync
+ * export (M10) — which moves the database file — carries the files with it, and so a
+ * smoke run's copies land in the smoke profile instead of the real one. Created
+ * lazily by the service that writes into it, since a profile with no attachments
+ * should not have the directory either.
+ */
+export function attachmentsDir(): string {
+  return join(dirname(databaseFile()), 'attachments');
 }

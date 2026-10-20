@@ -32,7 +32,11 @@
  *  17. the six views of M03 S1 filter one list rather than copying it — the archive
  *      draws the rows the ticks took out, ticking one there takes it back, a task
  *      abandoned through the detail shows up only in 已取消, and one added in 明天 is
- *      stored due tomorrow.
+ *      stored due tomorrow, and
+ *  18. an attachment is copied into the profile's own directory, drawn as a preview
+ *      card when it is an image and as a plain row when it is not, and removing the
+ *      row takes the copy with it while the file the user picked stays where it is
+ *      (M03 S3).
  *
  * Only two things come from the OS: the global shortcut, which a registered hotkey
  * only ever sees when the input queue produced it, and the app's own launch. Every
@@ -54,8 +58,9 @@
 import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { deflateSync } from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
@@ -77,6 +82,10 @@ const SUBTASK = 'Take the big bag';
 const TODAY_TASK = 'Call the plumber';
 /** Added while the 明天 view is showing, so the view's own rule dates it tomorrow. */
 const TOMORROW_TASK = 'Book the flight';
+
+/** The two files the smoke picker answers with (M03 S3): one image, one plain file. */
+const PICKED_IMAGE = 'picked-note.png';
+const PICKED_TEXT = 'picked-recipe.txt';
 
 /**
  * Phase 10's slider step. Four arrow presses of five percent each take the default
@@ -394,6 +403,129 @@ function dayStart(offsetDays) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate() + offsetDays).getTime();
 }
 
+/** The attachment rows of one task, read straight out of the smoke database. */
+function readAttachments(taskId) {
+  const Database = require('better-sqlite3');
+  const db = new Database(databaseFile, { readonly: true });
+  try {
+    db.pragma('busy_timeout = 5000');
+    return db
+      .prepare(
+        'SELECT id, task_id AS taskId, path, name, size, created_at AS createdAt ' +
+          'FROM attachments WHERE task_id = ? ORDER BY created_at ASC, id ASC',
+      )
+      .all(taskId);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Polls an expression in the page until it answers truthy, and returns the answer.
+ *
+ * For the steps whose result is a read rather than a write: picking an attachment
+ * announces nothing on `event:task-changed` — an attachment is not a task — so the
+ * only honest way to know the panel has drawn the rows is to keep asking the DOM
+ * until it says so.
+ */
+async function waitForEval(cdp, expression, timeoutMs = 8_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const value = await evaluate(cdp, expression);
+    if (value !== null && value !== undefined && value !== false) return value;
+    await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+  return null;
+}
+
+/**
+ * Puts the keyboard on a control the detail names by attachment id rather than by
+ * task: a task can carry several files, and the row being measured has to be the row
+ * that was measured.
+ */
+async function gotoAttachmentField(cdp, field, attachmentId) {
+  const landed = await evaluate(
+    cdp,
+    `(() => {
+       const wanted = ${JSON.stringify(field)};
+       const id = ${JSON.stringify(attachmentId)};
+       const node = [...document.querySelectorAll('[data-field="' + wanted + '"]')]
+         .find((each) => each.dataset.attachmentId === id);
+       if (node === undefined) return null;
+       node.focus();
+       return node === document.activeElement ? node.dataset.field : null;
+     })()`,
+  );
+  if (landed !== field) {
+    fail(`the panel has no focusable "${field}" on attachment ${attachmentId}`);
+  }
+  return landed;
+}
+
+/**
+ * A real, decodable PNG, small enough to build here rather than commit as a fixture.
+ *
+ * The preview comes out of the platform's own decoder, so the harness cannot hand it
+ * a file that merely *looks* like an image by its name: the bytes have to be a PNG
+ * for a thumbnail to come back at all. Five chunks and a CRC each is the whole format.
+ */
+function pngBytes(size) {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
+  header[8] = 8; // bit depth
+  header[9] = 2; // truecolour
+  header[10] = 0; // deflate
+  header[11] = 0; // adaptive filtering
+  header[12] = 0; // no interlacing
+
+  // One filter byte plus three colour bytes per pixel, row by row: a gradient, so the
+  // file is unmistakably a picture rather than a decoder's idea of an empty one.
+  const raw = Buffer.alloc(size * (1 + size * 3));
+  let at = 0;
+  for (let y = 0; y < size; y += 1) {
+    raw[at] = 0;
+    at += 1;
+    for (let x = 0; x < size; x += 1) {
+      raw[at] = Math.round((x / (size - 1)) * 255);
+      raw[at + 1] = Math.round((y / (size - 1)) * 255);
+      raw[at + 2] = 128;
+      at += 3;
+    }
+  }
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', header),
+    pngChunk('IDAT', deflateSync(raw)),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+/** Length, type, payload, CRC — the chunk every PNG is made of. */
+function pngChunk(type, data) {
+  const length = Buffer.alloc(4);
+  length.writeUInt32BE(data.length);
+
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+
+  return Buffer.concat([length, body, crc]);
+}
+
+/** The PNG CRC-32 (polynomial 0xedb88320, reflected, seeded and finished with all ones). */
+function crc32(buffer) {
+  let value = 0xffffffff;
+  for (const byte of buffer) {
+    value ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = (value >>> 1) ^ (0xedb88320 & -(value & 1));
+    }
+  }
+  return (value ^ 0xffffffff) >>> 0;
+}
+
 /** Starts the app against a smoke profile; the panel opens on its own DB. */
 function launchApp(electronBinary, dir) {
   return spawn(electronBinary, ['.'], {
@@ -654,6 +786,16 @@ async function main() {
   rmSync(smokeDir, { recursive: true, force: true });
   mkdirSync(smokeDir, { recursive: true });
   writeFileSync(ps1File, PS1, 'ascii');
+
+  // What the OS picker would have answered (M03 S3), set before the app is launched
+  // because the main process reads its environment once, at startup. One image and one
+  // plain file: the panel draws the one as a preview card and the other as a file row,
+  // and the run has to prove both — and that only the image was asked for a preview.
+  const pickedImage = join(smokeDir, PICKED_IMAGE);
+  const pickedText = join(smokeDir, PICKED_TEXT);
+  writeFileSync(pickedImage, pngBytes(32));
+  writeFileSync(pickedText, 'two eggs, one onion\n');
+  process.env.YICHEN_SMOKE_ATTACH = [pickedImage, pickedText].join(delimiter);
 
   // The helper is C# compiled at runtime, and PowerShell exits 0 even when that
   // compilation fails. Checked up front, so a broken harness is never reported as
@@ -989,6 +1131,131 @@ async function main() {
       pass('pressing "Daily" stored an RRULE on the task', { rule: repeated.repeatRule });
     } else {
       fail(`the repeat edit produced ${JSON.stringify(repeatSet?.detail ?? null)} and the rule ${JSON.stringify(repeated?.repeatRule ?? null)}`);
+    }
+
+    // --- phase 4e: an attachment is copied in, previewed, and taken away (M03 S3) -
+    // The picker itself cannot be clicked from a script, so the app was told before
+    // launch what the picker would return. Everything after that is what the run
+    // checks: that the file was *copied* into the profile's own attachments directory
+    // rather than merely pointed at, that an image comes back with a preview while a
+    // plain file does not, and that removing one row takes the app's copy with it and
+    // leaves the file the user picked alone.
+    await gotoField(cdp, 'detail-attachment-add');
+    await pressKey(cdp, 'Enter');
+
+    const drawn = await waitForEval(
+      cdp,
+      `(() => {
+         const opens = document.querySelectorAll('[data-field="detail-attachment-open"]').length;
+         const previews = document.querySelectorAll('[data-thumbnail]').length;
+         return opens === 2 ? { opens, previews } : null;
+       })()`,
+    );
+    if (drawn?.opens === 2 && drawn.previews === 1) {
+      pass('both picked files were drawn, and only the image got a preview', drawn);
+    } else {
+      fail(`the attachment list drew ${JSON.stringify(drawn)}, expected two rows and one preview`);
+    }
+
+    const attachmentRows = readAttachments(firstId);
+    const copiedImage = attachmentRows.find((row) => row.name === PICKED_IMAGE);
+    const attachmentDir = join(smokeDir, 'attachments');
+    const sourceBytes = readFileSync(pickedImage);
+    if (
+      attachmentRows.length === 2 &&
+      copiedImage !== undefined &&
+      copiedImage.path.startsWith(attachmentDir) &&
+      existsSync(copiedImage.path) &&
+      readFileSync(copiedImage.path).equals(sourceBytes)
+    ) {
+      pass('the image was copied into the app profile, byte for byte', {
+        path: copiedImage.path,
+      });
+    } else {
+      fail(
+        `the image row is ${JSON.stringify(copiedImage ?? null)} of ${JSON.stringify(attachmentRows.map((row) => row.path))}`,
+      );
+    }
+
+    // The name is the source's, so the user recognises what they attached; the size is
+    // the copy's, so the row describes the file that will actually open.
+    if (copiedImage?.size === sourceBytes.length) {
+      pass('the row carries the source name and the copy size', {
+        name: copiedImage.name,
+        size: copiedImage.size,
+      });
+    } else {
+      fail(`the row's size is ${copiedImage?.size}, expected ${sourceBytes.length}`);
+    }
+
+    // The preview is read off the page rather than trusted from the main process: the
+    // card's own image element, with a data URL on it.
+    const preview = await evaluate(
+      cdp,
+      `(() => {
+         const node = document.querySelector('[data-thumbnail="${copiedImage?.id ?? 'none'}"]');
+         return node === null ? null : node.getAttribute('src').slice(0, 15);
+       })()`,
+    );
+    if (preview === 'data:image/png;') {
+      pass('the image card drew a preview, as an inline PNG', { src: preview });
+    } else {
+      fail(`the card's preview src is ${JSON.stringify(preview)}, expected a PNG data URL`);
+    }
+
+    // Nothing is done about the open control: pressing it would hand the copy to the
+    // OS, and a photo viewer opening over the run is not a check. What is checked is
+    // that the control names the copy, which is the part the panel is responsible for.
+    const openedPath = await evaluate(
+      cdp,
+      `(() => {
+         const node = document.querySelector('[data-attachment-id="${copiedImage?.id ?? 'none'}"]');
+         return node === null ? null : node.dataset.path;
+       })()`,
+    );
+    if (openedPath === copiedImage?.path) {
+      pass('the open control points at the stored copy', { path: openedPath });
+    } else {
+      fail(`the open control points at ${JSON.stringify(openedPath)}, expected the copied path`);
+    }
+
+    await gotoAttachmentField(cdp, 'detail-attachment-remove', copiedImage?.id ?? '');
+    await pressKey(cdp, 'Enter');
+
+    const afterRemove = await waitForEval(
+      cdp,
+      `document.querySelectorAll('[data-field="detail-attachment-open"]').length === 1`,
+    );
+    const remaining = readAttachments(firstId);
+    if (
+      afterRemove === true &&
+      remaining.length === 1 &&
+      remaining[0].name === PICKED_TEXT &&
+      !existsSync(copiedImage?.path ?? '') &&
+      // The file the user picked is theirs: the app's copy went, the source did not.
+      existsSync(pickedImage)
+    ) {
+      pass('removing the attachment deleted the app copy and left the picked file', {
+        remaining: remaining[0].name,
+      });
+    } else {
+      fail(
+        `after removing the image: ${JSON.stringify(remaining.map((row) => row.name))}, copy still there: ${existsSync(copiedImage?.path ?? '')}`,
+      );
+    }
+
+    const plainRow = await evaluate(
+      cdp,
+      `(() => {
+         const node = document.querySelector('[data-field="detail-attachment-open"]');
+         const text = node === null ? null : node.textContent.trim();
+         return text === null ? null : { text, preview: node.querySelector('img') !== null };
+       })()`,
+    );
+    if (plainRow?.text === PICKED_TEXT && plainRow.preview === false) {
+      pass('the plain file is drawn as a row, with the name it was picked under', plainRow);
+    } else {
+      fail(`the remaining attachment drew ${JSON.stringify(plainRow)}, expected the file's name and no preview`);
     }
 
     // Escape, then read the tally off the list itself: the `0/1` chip is drawn by the

@@ -77,17 +77,24 @@ export const IPC = {
     undo: 'task:undo',
   },
   attachment: {
-    /** Renderer -> main: the attachments (references) hung on one task. */
+    /** Renderer -> main: the attachments (copies) hung on one task. */
     list: 'attachment:list',
     /**
-     * Renderer -> main: present the OS file picker and store what it returns. The
-     * dialog belongs to the main process — a renderer cannot open one, and a path
-     * has to be typed in by the user rather than sent from a page (S7).
+     * Renderer -> main: present the OS file picker and copy what it returns into the
+     * app's own attachments directory. The dialog belongs to the main process — a
+     * renderer cannot open one, and a path has to be typed in by the user rather than
+     * sent from a page (S7).
      */
     add: 'attachment:add',
     remove: 'attachment:remove',
-    /** Open the file with its OS handler. */
+    /** Open the copy with its OS handler. */
     open: 'attachment:open',
+    /**
+     * Renderer -> main: one image attachment's preview, as a data URL, or `null` when
+     * there is none (M03 S3). A separate read rather than a field on the row: a
+     * thumbnail is the only large payload of the two, and a non-image never needs one.
+     */
+    thumbnail: 'attachment:thumbnail',
   },
   i18n: {
     setLocale: 'i18n:set-locale',

@@ -184,7 +184,10 @@ M02 把下面几条写进了仓储层（`src/main/db/repositories/`），而不�
 - **勾选完成即生成下一次实例**（M02 D10）：`updateTaskFromPatch` 在同一个写动作里建出新行，因此一次用户动作的 `change.ids` 会**出现两行**（旧实例 + 新实例），撤销栈与标记重算都按整个效果记。新实例只继承"这件事是什么"（标题 / 清单 / 父任务 / 备注 / 优先级 / 标签 / 预估 / 提前提醒 / 规则），不继承子任务、实际耗时与完成时间——清单是这次要做的，不是下一次已经做过的。
 - **撤销栈存的是"要放回的行"的快照**（M02 D7）：条目不是逆操作、而是一组 `{ id, before, tags }`——`before` 为 `null` 表示这行是**新建**的（撤销即软删它），否则按快照整行回写（`restoreTask`，带上它在改动前的标签集）。一次用户动作 = 一条条目（批量命令一条、勾选生成下一次的旧+新两行一条），所以一次 `Ctrl+Z` 收回的是整个效果。栈在内存、上限 30、进程退出即失效；`popUndo` 是**消费式**弹出（不压回），否则连按 `Ctrl+Z` 会撤销自己的撤销、栈永不空。
 - **一次批量命令 = 一次写入 = 一次通知 = 一条撤销条目**（M02 §5）：`bulkTasks` 内部循环调用单行的 `applyPatch` 后再**统一**压一条撤销条目，所以选择集多大都只让标记重算一次、只让面板重取一次；`delete` 与单行走**同一条软删级联**路径。
-- **附件只存路径引用，不复制文件**（M02 §6）：`attachments` 行只记 `path`；展示用的 `name`（basename）与 `size` 由主进程每次 `statSync` 现读，文件被删或改名时这一行仍在、`size` 为 `null`。渲染层**永远不发路径**，只能点按钮让主进程弹 `dialog` 选择器；`shell.openPath` 也只在 IPC handler 里——服务层因此不 import electron、可单测。
+- **附件是复制进来的，不是引用**（M02 §6，M03 S3）：点「添加文件」后主进程把选中的文件**复制**到 `<userData>/attachments/`，库里 `path` 存的是**副本**路径，副本名是 `newId()` + 源文件扩展名（同一轮里两个同名文件不会互相覆盖，系统仍按正确类型打开），行里展示的 `name` 存**源文件的** basename——用户认得的是自己选的那个文件名。`size` 存复制时的实测值，不是每次 `statSync` 现读：`attachments` 行描述的是将要被打开的那个副本，而副本由 app 自己产生、不会自己变化。删除附件行时**连带删掉这份副本**，但只删 `attachments/` 目录**直属**下的路径（`dirname(resolve(path)) === resolve(dir)`）——从旧 profile 恢复或手写进去的行可能指向用户的文件，点一下"移除"不该删掉别人的文档。源文件始终归用户所有，只读不动。
+  - 为什么不再只存引用：用户整理一下选文件时所在的目录，那条引用就断了；更关键的是 M10 的文件夹同步只搬 app 自己的目录，引用带不走——"附件跟着任务走"这件事只有副本能兑现。代价是同一份文件在磁盘上有两份，这是明确接受的交换。
+  - 渲染层**永远不发路径**，只能点按钮让主进程弹 `dialog` 选择器；`shell.openPath` 也只在 IPC handler 里——服务层因此不 import electron、可单测（目录由 IPC 层传进去）。
+- **缩略图是另一条通道，不是行上的字段**（M03 S3）：图片附件的预览走 `attachment:thumbnail`（id → data URL | null），不与 `attachment:list` 混在一起——预览是两者中唯一的大负载，非图片行根本不需要它。主进程先问平台自己的缩略图器（Windows shell provider / macOS Quick Look，`nativeImage.createThumbnailFromPath`，正好只有这两个平台），平台拒绝时退回自己解码并缩到 128px（`data URL` 全长要过一个 IPC 字符串，不缩会是几 MB）；两条路都拿不到东西就回 `null`，面板据此画文件行而不是空卡片。是否是图片由 `shared/utils/attachment.ts` 的 `isImageName` 一处判断，主进程与渲染层共用同一个答案。
 - **视图是过滤条件，不是另一份数据**（M02 §6，M03 §2）：面板只存一个 `view`，六个视图（收件箱 / 今天 / 明天 / 即将到期 / 已完成 / 已取消）是同一个查询换 `filterFor(view)`——切换即重取，行不复制、也不缓存。所以菜单的「今天」项与侧栏落在同一个字段上，两条路径不可能得到两种状态。M03 S1 起切换视图只有**一个入口**：两个控件写同一个状态，用户分不清哪个才是"当前"，点谁都会再动一次。
 - **归档视图是同一条查询换状态，不是新表**（M03 D5）：已完成 = `status: done` + `completed_at DESC` 排序，已取消 = `status: cancelled`。「已完成」里点勾 = 回到 `todo`——不记录完成前是什么状态，那要每行多存一个字段、在所有写入口维护它，为一个能手动改回去的差别不值；「已取消」里不给勾钮，改状态走详情面板。
 
@@ -262,9 +265,9 @@ CREATE INDEX idx_reminders_fire ON reminders(state, fire_at);
 CREATE TABLE attachments (
   id         TEXT PRIMARY KEY,
   task_id    TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  path       TEXT NOT NULL,        -- 本地文件引用，不做云上传
-  name       TEXT,
-  size       INTEGER,
+  path       TEXT NOT NULL,        -- 指向 <userData>/attachments/ 下的副本，不做云上传
+  name       TEXT,                 -- 源文件的 basename（用户认得的名字）
+  size       INTEGER,              -- 复制时的实测字节数
   created_at INTEGER NOT NULL
 );
 
