@@ -67,6 +67,9 @@ export const useDetailStore = create<DetailStore>((set, get) => ({
     set({ taskId: id, task: null, subtasks: [], attachments: [], thumbnails: {}, saveFailed: false });
 
     const result = await window.api.task.get(id);
+    // Another row was picked while this read was in flight; its own read is the answer
+    // now, so this one is dropped rather than allowed to land on the newer task.
+    if (get().taskId !== id) return;
     if (!result.ok) {
       set({ saveFailed: true });
       return;
@@ -79,8 +82,10 @@ export const useDetailStore = create<DetailStore>((set, get) => ({
       return;
     }
     set({ task: result.data });
-    await get().refreshSubtasks();
-    await get().refreshAttachments();
+    // The checklist and the attachments are below the fold and independent of each
+    // other, so they are read side by side rather than one after the other: the form is
+    // already drawn from the row above, and the two reads only fill in what follows.
+    await Promise.all([get().refreshSubtasks(), get().refreshAttachments()]);
   },
 
   refresh: async () => {
@@ -131,6 +136,7 @@ export const useDetailStore = create<DetailStore>((set, get) => ({
 
     const result = await window.api.task.query({ ...SUBTASK_FILTER, parentId: id });
     if (!result.ok) return;
+    if (get().taskId !== id) return;
     // The query returns rows without their tags; the checklist does not draw any, and
     // asking for them would be a second read on every subtask write.
     set({ subtasks: result.data.map((task) => ({ ...task, tags: [] })) });
@@ -163,10 +169,16 @@ export const useDetailStore = create<DetailStore>((set, get) => ({
     }
     const result = await window.api.attachment.list(id);
     if (!result.ok) return;
+    if (get().taskId !== id) return;
     // Rows first, previews second: a non-image never needs one, and a preview is the
     // only large payload of the two, so the row list stays as cheap as it was (M03 S3).
     const rows = result.data;
-    set({ attachments: rows, thumbnails: await readThumbnails(rows) });
+    set({ attachments: rows, thumbnails: {} });
+    // Drawn as soon as the rows are known; the previews arrive a moment later and are
+    // one more set rather than a condition of the list appearing.
+    const thumbnails = await readThumbnails(rows);
+    if (get().taskId !== id) return;
+    set({ thumbnails });
   },
 
   pickAttachments: async () => {

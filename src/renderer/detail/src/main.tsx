@@ -77,17 +77,28 @@ function DetailWindow({ taskId }: { taskId: string | null }): ReactElement {
   const task = useDetailStore((state) => state.task);
   const saveFailed = useDetailStore((state) => state.saveFailed);
   const [phase, setPhase] = useState<'enter' | 'open'>('enter');
+  /**
+   * The row this window is currently on. It starts as the one the page was opened on and
+   * is re-pointed over IPC when the list picks another task — the window is reused, so
+   * there is no reload and no second React mount (§9.1). The query string still carries
+   * the first task, which is what makes the first frame the right one.
+   */
+  const [shownTaskId, setShownTaskId] = useState(taskId);
 
   useEffect(() => {
-    if (taskId === null) return;
-    void open(taskId);
+    return window.api.on.detailOpen((payload) => setShownTaskId(payload.taskId));
+  }, []);
+
+  useEffect(() => {
+    if (shownTaskId === null) return;
+    void open(shownTaskId);
     // One write, one read, from every surface: the panel announces what changed and
     // both renderers re-read — this window re-reads the one row it is showing, which
     // is how a field saved here comes back as the stored value (M02 D4).
     return window.api.on.taskChanged(() => {
       void refresh();
     });
-  }, [taskId, open, refresh]);
+  }, [shownTaskId, open, refresh]);
 
   useEffect(() => {
     // The frame-after-frame flip the popup uses: the transition needs a painted

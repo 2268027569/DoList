@@ -216,6 +216,13 @@
 - `Field` 增加 `action` 槽位承载标签行右侧的开关；`Choice` 的注释同步为"未选中无底无框、悬停只提亮"（此前文档还写着填色块）
 - 冒烟：phase 4d 先断言一次性任务**没有**重复预设，按 `detail-repeat-toggle` 后再等 `detail-repeat-daily` 出现；phase 12 改用 `detail-remind-toggle`；共 94/94 通过；单测 290 例、`smoke:marker` 21/21 通过
 
+#### 详情窗打开 / 换指向的性能（2026-10-21 晚）
+
+- **"点任务半天才弹出来"的主因是整页重载**：再点一行时 `showDetailWindow` 原用 `loadRenderer(..., { task })` 让同一扇窗带着新的 `?task=` **重新加载**——换一行数据要把 i18n 引导、React 挂载、整份样式表和一整套模块图重做一遍（dev 下还走 Vite 的按需编译），点击之间露出一张空白卡片。现在改为向已加载的窗口发 `event:detail-open { taskId }`，渲染层只把 `shownTaskId` 换掉并重读一行。只有首个页面**还在加载**（`webContents.isLoading()`）时才退回重载，因为那时监听器还没注册、事件会被丢掉
+- **首开仍要建窗 + 加载页面**，实测 dev 下 `ready-to-show` 约 330–440ms（日志新增 `detail window ready { ms }`，可直接对着看）。开窗后的三次读改成"先画行、其余并发"：`task.get` 一到就 `set({ task })` 画表单，检查清单与附件在折叠线以下、彼此独立，改 `Promise.all` 并发；缩略图先给出附件行、预览到了再补一次 `set`，不再让整份附件列表等缩略图
+- **换指向的竞态**：`open` / `refreshSubtasks` / `refreshAttachments` 在 await 之后比对 `get().taskId === id` 才落状态，快速连点两行时旧读取不会覆盖新任务
+- 质量门：typecheck、lint、i18n 103 键、单测 290 例、build、`smoke:tasks` 94/94、`smoke:marker` 21/21
+
 ### 修复
 
 - **提醒在建行那一刻就被丢掉**（M04 P0）：一条截止 18:50、提前 5 分钟的提醒若在 18:47 被设好，它要开口的那一刻（18:45）已经过去，而原规则「只武装未来时刻」把它直接丢弃——`reminders` 里一行都没有，于是这条提醒永远不会到，任务行看起来却完全正常。现在改为读同一条 6 小时宽容规则：已经路过、但不超过 6 小时的那一刻**照常落库**，落在它自己的过去时刻上，调度器给 delay 为 0 的定时器，下一刻就开口；超过 6 小时的仍不武装（那属于「错过」，不是「刚刚」）。规则写在 `shared/utils/reminder.ts` 的 `armableFireAt`，被服务层与调度器读同一份。

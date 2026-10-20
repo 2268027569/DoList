@@ -161,6 +161,12 @@ const api = {
     /** Open this task — sent when a reminder toast was clicked (M04). */
     taskFocus: (listener: (payload: TaskFocusPayload) => void) =>
       subscribe(IPC.event.taskFocus, listener),
+    /**
+     * Another task was picked while this detail window is open: re-point it without
+     * reloading the page (§9.1).
+     */
+    detailOpen: (listener: (payload: { taskId: string }) => void) =>
+      subscribe(IPC.event.detailOpen, listener),
   },
 } as const;
 

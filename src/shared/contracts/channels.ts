@@ -159,6 +159,13 @@ export const IPC = {
      * which is the one surface that is not the panel asking for something itself.
      */
     taskFocus: 'event:task-focus',
+    /**
+     * Main -> detail: re-point this window at another task. The window is reused rather
+     * than reloaded, because a reload tears down the renderer and boots React again for
+     * what is one row of data — the click that picks the next task should cost a read,
+     * not a page load (§9.1).
+     */
+    detailOpen: 'event:detail-open',
   },
 } as const;
 

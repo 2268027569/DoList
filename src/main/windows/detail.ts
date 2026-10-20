@@ -1,6 +1,7 @@
 import { BrowserWindow, screen } from 'electron';
 import { join } from 'node:path';
 
+import { IPC } from '@shared/contracts/channels';
 import { DETAIL_TASK_QUERY_KEY } from '@shared/contracts/detail';
 import { panelSizeOf } from '@shared/contracts/settings';
 import { TRANSPARENT_WINDOW_BACKGROUND } from '@shared/theme/window-background';
@@ -77,12 +78,22 @@ export function showDetailWindow(taskId: string): void {
       open.delete(id);
     } else {
       if (id !== taskId) {
-        // A different task: the window stays, and stays where it is (the user may
-        // have moved it), and loads the new task's id — which travels in the query
-        // string exactly as the first one did.
+        // A different task. The window stays where it is (the user may have moved it),
+        // and it is *told* which row to show rather than reloaded: a reload throws away
+        // the whole renderer — i18n boot, React mount, the CSS — to change one row, and
+        // it showed as a blank card between clicks. The renderer is the same page for
+        // every task; only the id differs.
+        //
+        // The one exception is a window that is still loading its first page: it has no
+        // listener yet, so an event would be dropped. Reloading it with the new id is
+        // both safe and correct — the first paint then belongs to the task clicked last.
+        if (window.webContents.isLoading()) {
+          void loadRenderer(window, 'detail', params, { [DETAIL_TASK_QUERY_KEY]: taskId });
+        } else {
+          window.webContents.send(IPC.event.detailOpen, { taskId });
+        }
         open.delete(id);
         open.set(taskId, window);
-        void loadRenderer(window, 'detail', params, { [DETAIL_TASK_QUERY_KEY]: taskId });
         log('detail window re-pointed', { taskId });
       }
       window.show();
@@ -96,9 +107,14 @@ export function showDetailWindow(taskId: string): void {
   open.set(taskId, window);
   placeDetail(window);
   // Sized and placed before it is shown; only the card inside it animates (§7, §9.1).
+  const requestedAt = Date.now();
   window.once('ready-to-show', () => {
     window.show();
     window.focus();
+    // How long the first open took, from the click to the first paint. Worth a line in
+    // the log: the page load is the only part of this path that varies by machine, and
+    // a recurrence of "it opens slowly" should be answerable from the log alone.
+    log('detail window ready', { taskId, ms: Date.now() - requestedAt });
   });
   void loadRenderer(window, 'detail', params, { [DETAIL_TASK_QUERY_KEY]: taskId });
   log('detail window shown', { taskId, bounds: window.getBounds() });
