@@ -14,7 +14,7 @@ import { isSmokeEnabled, smokeRecord } from '../platform/smoke';
 import { appSettings } from '../services/settings';
 import { loadRenderer } from './load-renderer';
 import { onMarkerMoved } from './marker';
-import { expandPanel, focusPanel, getPanelWindow, onPanelHidden, panelStateOf, setPanelHeld } from './panel';
+import { expandPanel, focusPanel, getPanelWindow, onPanelHidden, onPanelShown, panelStateOf, setPanelHeld } from './panel';
 
 const log = createLogger('windows/detail');
 
@@ -41,6 +41,40 @@ const log = createLogger('windows/detail');
 /** The open detail, keyed by the task it shows. At most one entry. */
 const open = new Map<string, BrowserWindow>();
 
+/**
+ * A window that has already loaded the detail page and is waiting for its first task.
+ *
+ * The page load — a renderer process, i18n boot, React, the stylesheet, and in dev the
+ * module graph — is the expensive half of opening, and none of it depends on *which*
+ * task is being opened. Doing it in the click was why the first open stayed slow while
+ * switching rows became instant. So it is done on idle instead: at startup, and again
+ * whenever the panel comes on screen (the user is browsing the list at that moment).
+ */
+let warm: BrowserWindow | null = null;
+/** True once the warm window has painted, i.e. its listener is registered. */
+let warmReady = false;
+/** Pending "warm after the panel has finished expanding" timer. */
+let warmTimer: NodeJS.Timeout | null = null;
+
+/**
+ * How long after the panel appears the warm window is loaded.
+ *
+ * Not in the same tick: the panel is expanding (a 200ms compositor transition) and a
+ * second renderer coming up in dev competes with it for the same CPU, which shows as a
+ * stutter in the one animation the user is watching. A quarter of a second later the
+ * animation is done and the list is what the user is reading — the idle moment.
+ */
+const WARM_DELAY_MS = 260;
+
+/**
+ * How long after startup the first warm window is loaded.
+ *
+ * Startup is the one moment the app is visibly arriving (marker, tray, shortcuts), and a
+ * second renderer booting in dev competes with all of it. A second later those are done
+ * and the process is idle — still well before the panel is likely to have been opened.
+ */
+const STARTUP_WARM_DELAY_MS = 1200;
+
 /** Boot parameters, cached at startup: a detail window is drawn with the active theme. */
 let boot: BootParams | null = null;
 
@@ -53,7 +87,18 @@ export function configureDetailWindows(params: BootParams): void {
   // The detail hangs off the panel, so it follows the panel's footing: a marker drag
   // moves the panel, and a detail left behind would sit beside nothing.
   onMarkerMoved(repositionDetail);
-  onPanelHidden(closeDetailWindow);
+  onPanelHidden(() => {
+    clearWarmTimer();
+    closeDetailWindow();
+    discardWarm();
+  });
+  // Shown / hidden is the panel's own working cycle, so the warm window follows it: one
+  // is loaded while the user is looking at the list, and none is kept once the list (and
+  // therefore the detail's footing) is gone.
+  onPanelShown(schedulePrewarm);
+  // The startup warm is the only one that can make the *first* click instant, so it is
+  // scheduled rather than run here — see STARTUP_WARM_DELAY_MS.
+  schedulePrewarm(STARTUP_WARM_DELAY_MS);
 }
 
 /**
@@ -103,20 +148,40 @@ export function showDetailWindow(taskId: string): void {
     }
   }
 
-  const window = createWindow(taskId);
+  const adopted = takeWarm();
+  const window = adopted?.window ?? createWindow(taskId);
   open.set(taskId, window);
   placeDetail(window);
   // Sized and placed before it is shown; only the card inside it animates (§7, §9.1).
   const requestedAt = Date.now();
-  window.once('ready-to-show', () => {
+  const reveal = (): void => {
     window.show();
     window.focus();
-    // How long the first open took, from the click to the first paint. Worth a line in
-    // the log: the page load is the only part of this path that varies by machine, and
-    // a recurrence of "it opens slowly" should be answerable from the log alone.
-    log('detail window ready', { taskId, ms: Date.now() - requestedAt });
-  });
-  void loadRenderer(window, 'detail', params, { [DETAIL_TASK_QUERY_KEY]: taskId });
+    window.moveTop();
+    // How long the open took, from the click to the first paint. Worth a line in the
+    // log: it is the measure that says whether the warm window did its job.
+    log('detail window ready', {
+      taskId,
+      ms: Date.now() - requestedAt,
+      warm: adopted !== null,
+    });
+  };
+
+  if (adopted === null) {
+    window.once('ready-to-show', reveal);
+    void loadRenderer(window, 'detail', params, { [DETAIL_TASK_QUERY_KEY]: taskId });
+  } else {
+    // The page is already loaded, so the only thing left is to name the row. Painting
+    // may still be a moment away when the panel was *just* shown and the warm window was
+    // born on that same event; in that case this waits for the first paint, exactly like
+    // a cold open — the warm window was simply created a few milliseconds earlier.
+    const openTask = (): void => {
+      window.webContents.send(IPC.event.detailOpen, { taskId });
+      reveal();
+    };
+    if (adopted.ready) openTask();
+    else window.once('ready-to-show', openTask);
+  }
   log('detail window shown', { taskId, bounds: window.getBounds() });
   smokeRecord('detail-window-opened', {
     taskId,
@@ -152,9 +217,106 @@ export function closeDetailWindow(): void {
 
 /** Same shape as the panel window, one per task at most. */
 function createWindow(taskId: string): BrowserWindow {
+  const window = buildWindow();
+  attachLifecycle(window);
+  log('detail window created', { taskId });
+  return window;
+}
+
+/**
+ * Warms once the panel has settled (`WARM_DELAY_MS`), rather than inside the event that
+ * is still animating it.
+ */
+function schedulePrewarm(delayMs: number = WARM_DELAY_MS): void {
+  if (warmTimer !== null || isSmokeEnabled()) return;
+  const fromShow = delayMs === WARM_DELAY_MS;
+  warmTimer = setTimeout(() => {
+    warmTimer = null;
+    // The panel may have folded away in the meantime, and a warm window with no list to
+    // lean on would only be memory: the hide already asked for none. (The startup warm
+    // has no such list to wait for — it warms ahead of the first open.)
+    if (fromShow && panelStateOf() === 'hidden') return;
+    prewarmDetailWindow();
+  }, delayMs);
+}
+
+function clearWarmTimer(): void {
+  if (warmTimer === null) return;
+  clearTimeout(warmTimer);
+  warmTimer = null;
+}
+
+/**
+ * Loads a detail page now and keeps the window hidden until a task is clicked.
+ *
+ * Deliberately skipped under the harness: two windows would then share the detail
+ * URL, and attaching "the detail" would no longer mean one window. The smoke suite
+ * measures the cold path, which is what the harness can reason about.
+ */
+function prewarmDetailWindow(): void {
+  const params = boot;
+  if (params === null || isSmokeEnabled()) return;
+  if (warm !== null && !warm.isDestroyed()) return;
+  // A open detail already has its page loaded; there is nothing a second one would save.
+  if (open.size > 0) return;
+
+  const window = buildWindow();
+  warm = window;
+  warmReady = false;
+  window.once('ready-to-show', () => {
+    if (warm === window) warmReady = true;
+  });
+  window.on('closed', () => {
+    if (warm !== window) return;
+    warm = null;
+    warmReady = false;
+  });
+  // The panel can fold away (or the app can quit) while this page is still loading, and
+  // `loadURL` rejects on a window that was destroyed under it. That is a normal end for
+  // a warm window — it never held anything — so it is not reported as a failure.
+  void loadRenderer(window, 'detail', params).catch(() => undefined);
+  log('detail window warmed');
+}
+
+/** Hands the warmed window over, or `null` when there is none to hand over. */
+function takeWarm(): { window: BrowserWindow; ready: boolean } | null {
+  const window = warm;
+  warm = null;
+  if (window === null || window.isDestroyed()) {
+    warmReady = false;
+    return null;
+  }
+  clearWarmTimer();
+  // The panel may have been resized since this window was warmed; the pair is drawn at
+  // one size, so the window takes the current one before it is placed and shown.
+  const size = detailSize();
+  window.setSize(size.width, size.height);
+  const ready = warmReady;
+  warmReady = false;
+  // From here on it is an ordinary detail window, so it gets the ordinary bookkeeping
+  // (forget the row, hand the panel its focus back, release the hold) as well.
+  attachLifecycle(window);
+  return { window, ready };
+}
+
+/** One warm window at most, and none once the panel it leans on is gone. */
+function discardWarm(): void {
+  const window = warm;
+  warm = null;
+  warmReady = false;
+  if (window !== null && !window.isDestroyed()) window.destroy();
+}
+
+/** The size the detail shares with the panel (the harness fixes it, see buildWindow). */
+function detailSize(): Size {
+  return isSmokeEnabled() ? PANEL_SIZE : clampPanelSize(panelSizeOf(appSettings()));
+}
+
+/** The window itself, before anything is said about which task it holds. */
+function buildWindow(): BrowserWindow {
   // The harness starts from the default size, like the panel does and for the same
   // reason: a size persisted by the last run must not decide what this run measures.
-  const size = isSmokeEnabled() ? PANEL_SIZE : clampPanelSize(panelSizeOf(appSettings()));
+  const size = detailSize();
 
   const window = new BrowserWindow({
     width: size.width,
@@ -186,7 +348,17 @@ function createWindow(taskId: string): BrowserWindow {
     window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   }
   window.setAlwaysOnTop(true);
+  return window;
+}
 
+/**
+ * The bookkeeping a window carries once a task is open in it.
+ *
+ * Attached late — not at construction — because a warm window is built before it holds
+ * anything: until a click hands it a task there is no row to forget and no hold of the
+ * panel's to release.
+ */
+function attachLifecycle(window: BrowserWindow): void {
   // `destroy()` (which is how this window is taken down) does not emit `close`, so the
   // bookkeeping lives on `closed` alone — the one event every way out reports.
   window.on('closed', () => {
@@ -211,9 +383,6 @@ function createWindow(taskId: string): BrowserWindow {
     // task id is what proves the right one went.
     smokeRecord('detail-closed', { taskId: closedId });
   });
-
-  log('detail window created', { taskId, size });
-  return window;
 }
 
 /** Places the window beside the panel, on the side the panel is not docked to. */

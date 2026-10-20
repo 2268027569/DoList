@@ -54,6 +54,13 @@ let held = false;
 /** Listeners for "the panel left the screen", which is when a dependent window gives up. */
 const hiddenListeners = new Set<() => void>();
 
+/**
+ * Listeners for "the panel came on screen". The detail window is warmed on this signal
+ * rather than on the click that opens it: the panel is shown when the user is about to
+ * pick a row, which is exactly the idle moment the page load can be spent in.
+ */
+const shownListeners = new Set<() => void>();
+
 export function getPanelWindow(): BrowserWindow | null {
   return panelWindow;
 }
@@ -94,6 +101,11 @@ export function focusPanel(): void {
 /** Runs `listener` whenever the panel leaves the screen, whatever asked it to. */
 export function onPanelHidden(listener: () => void): void {
   hiddenListeners.add(listener);
+}
+
+/** Runs `listener` whenever the panel is brought on screen (windows/detail.ts warms). */
+export function onPanelShown(listener: () => void): void {
+  shownListeners.add(listener);
 }
 
 export function createPanelWindow(boot: BootParams): BrowserWindow {
@@ -179,6 +191,7 @@ export function expandPanel(): PanelState {
 
   panelState = 'shown';
   setMarkerPanelVisible(true);
+  for (const listener of shownListeners) listener();
   sendToPanel(IPC.event.panelState, { state: 'expanding', durationMs: EXPAND_DURATION_MS });
   // Under the harness the caret always goes to quick-add, so a keyboard run can
   // create a task without first aiming at the field. A real run only does that on
