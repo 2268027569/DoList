@@ -3,13 +3,13 @@ import { join } from 'node:path';
 
 import { IPC } from '@shared/contracts/channels';
 import { panelSizeOf } from '@shared/contracts/settings';
-import { TRANSPARENT_WINDOW_BACKGROUND } from '@shared/theme/window-background';
 import { placePanel, snapToWorkArea } from '@shared/utils/anchoring';
 import { clampPanelSize, PANEL_SIZE } from '@shared/utils/panel-geometry';
 import type { BootParams, PanelState, Rect } from '@shared/types/app';
 import type { Size } from '@shared/utils/marker-geometry';
 import { createLogger } from '../logger';
 import { isSmokeEnabled, smokeRecord } from '../platform/smoke';
+import { windowMaterialOptions } from '../platform/window-material';
 import { appSettings, updateAppSettings } from '../services/settings';
 import { loadRenderer } from './load-renderer';
 import { getMarkerWindow, onMarkerMoved, revealMarker, setMarkerPanelVisible } from './marker';
@@ -120,8 +120,10 @@ export function createPanelWindow(boot: BootParams): BrowserWindow {
     height: size.height,
     show: false,
     frame: false,
-    transparent: true,
-    backgroundColor: TRANSPARENT_WINDOW_BACKGROUND,
+    // Glass when the OS can draw a backdrop, the old transparent window otherwise
+    // (platform/window-material.ts). The card fills the window in the glass case, so
+    // the window is also what gives it its rounded corners.
+    ...windowMaterialOptions(boot.glass === true),
     resizable: false,
     maximizable: false,
     minimizable: false,
@@ -131,8 +133,6 @@ export function createPanelWindow(boot: BootParams): BrowserWindow {
     // marker and the shortcuts, and it would be pointless if another window could
     // cover it (docs/ARCHITECTURE.md §9.9).
     alwaysOnTop: true,
-    hasShadow: false,
-    roundedCorners: false,
     ...(process.platform === 'win32' ? { thickFrame: false } : {}),
     ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
     webPreferences: {

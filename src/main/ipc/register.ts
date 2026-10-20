@@ -22,7 +22,12 @@ import { readRawSetting } from '../db/repositories/settings';
 import { refreshTray } from '../platform/tray';
 import { popupAppMenu } from '../platform/app-menu';
 import { smokeRecord } from '../platform/smoke';
-import { appSettings, updateAppSettings, writeMarkerAnchor } from '../services/settings';
+import {
+  appSettings,
+  applyNativeTheme,
+  updateAppSettings,
+  writeMarkerAnchor,
+} from '../services/settings';
 import { broadcastLocale, broadcastTheme } from '../services/broadcast';
 import { attachmentChannelHandlers } from './handlers/attachment';
 import { detailChannelHandlers } from './handlers/detail';
@@ -121,6 +126,11 @@ export function registerIpcHandlers(): void {
 
     const previous = appSettings();
     const updated = updateAppSettings(parsed.data);
+    if (updated.themeMode !== previous.themeMode) {
+      // The material behind every card follows the OS dark-mode flag (window-material.ts),
+      // so it is told before the renderers are.
+      applyNativeTheme();
+    }
     if (updated.themeMode !== previous.themeMode || updated.themeId !== previous.themeId) {
       broadcastTheme();
     }

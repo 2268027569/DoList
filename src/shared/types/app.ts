@@ -86,6 +86,13 @@ export interface BootParams {
    */
   panelOpacity?: number;
   /**
+   * Whether the window sits on a system-drawn material (Windows acrylic / macOS
+   * vibrancy). Read before the first paint like the theme: a glass window drops the
+   * margin that the CSS shadow used to live in, and the card has to be drawn without
+   * it rather than resize after it appears (§7).
+   */
+  glass?: boolean;
+  /**
    * Marker-only: applied before the first paint so the window never flashes a
    * different shape / scale than the one it was sized for (§9.5).
    */

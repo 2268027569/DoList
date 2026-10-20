@@ -6,11 +6,11 @@ import {
   encodeReminderPopupPayload,
 } from '@shared/contracts/reminder';
 import type { ReminderDuePayload } from '@shared/contracts/reminder';
-import { TRANSPARENT_WINDOW_BACKGROUND } from '@shared/theme/window-background';
 import { REMINDER_POPUP_SIZE, placeReminderPopup } from '@shared/utils/anchoring';
 import type { BootParams, Rect } from '@shared/types/app';
 import { createLogger } from '../logger';
 import { smokeRecord } from '../platform/smoke';
+import { windowMaterialOptions } from '../platform/window-material';
 import { loadRenderer } from './load-renderer';
 import { getMarkerWindow, onMarkerMoved, revealMarker } from './marker';
 
@@ -74,8 +74,9 @@ export function showReminderWindow(payload: ReminderDuePayload): void {
     height: REMINDER_POPUP_SIZE.height,
     show: false,
     frame: false,
-    transparent: true,
-    backgroundColor: TRANSPARENT_WINDOW_BACKGROUND,
+    // The popup belongs to the same family as the panel and the detail (M07): the
+    // material is whatever the OS can draw, and the card decides what shows through.
+    ...windowMaterialOptions(params.glass === true),
     resizable: false,
     maximizable: false,
     minimizable: false,
@@ -84,8 +85,6 @@ export function showReminderWindow(payload: ReminderDuePayload): void {
     // Never covered: it is the surface that speaks when the OS notification could not
     // be answered, so it has to be above whatever the user has in front of them.
     alwaysOnTop: true,
-    hasShadow: false,
-    roundedCorners: false,
     ...(process.platform === 'win32' ? { thickFrame: false } : {}),
     ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
     webPreferences: {

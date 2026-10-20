@@ -16,7 +16,7 @@ import { registerShortcuts, unregisterShortcuts } from './platform/shortcuts';
 import { createTray, destroyTray } from './platform/tray';
 import { broadcastTheme } from './services/broadcast';
 import { startReminderScheduler, stopReminderScheduler } from './services/scheduler';
-import { appSettings, resolveBoot } from './services/settings';
+import { appSettings, applyNativeTheme, resolveBoot } from './services/settings';
 import { reconcileReminders } from './services/tasks';
 import { createMarkerWindow } from './windows/marker';
 import { createPanelWindow, expandPanel } from './windows/panel';
@@ -77,6 +77,9 @@ async function start(): Promise<void> {
     return;
   }
 
+  // Before any window exists: the OS draws the glass in the tint it is told about,
+  // and the windows are created at their final appearance rather than repainted (§7).
+  applyNativeTheme();
   const boot = resolveBoot(SMOKE);
   if (boot.locale !== currentLocale()) await initI18n(boot.locale);
 

@@ -450,6 +450,7 @@ theme: { extend: { colors: {
 
 - **只允许在令牌层出现十六进制颜色**；组件样式里出现 `#fff`、`rgba(0,0,0,.3)` 一律视为缺陷（CI 用正则做静态检查）。
 - 防闪白：主进程在建窗前先读设置算出 `mode`+`theme`，写入 `BrowserWindow` 的 `backgroundColor`，并在 HTML 顶部内联脚本先行设置 `data-mode`，避免首帧白屏闪烁。
+- **毛玻璃是系统材质，不是 CSS**：面板 / 详情 / 提醒弹窗三个窗口在 Win11 22H2+ 用 `backgroundMaterial: 'acrylic'`、macOS 用 `vibrancy: 'under-window'` + `visualEffectState: 'active'`。`backdrop-filter` 在这里不成立——窗口为了让卡片自己画阴影而透明，页面后面没有可模糊的像素；只有让系统在窗口**底下**画材质才有真磨砂。材质窗口反过来**不能** `transparent: true`（分层窗口带不了 DWM 材质，只会得到黑矩形），所以玻璃路径是 `transparent: false` + `backgroundColor: '#00000000'` + `roundedCorners: true`，圆角从 CSS 交给窗口。能力判定与参数收在 `src/main/platform/window-material.ts`，低版本 Windows 与 Linux 退回原透明窗口。渲染层拿到 boot 的 `glass` 后写 `data-material="glass|flat"`：玻璃下外层 8px 内边距归零（卡片填满窗口），卡片底色降到 50% × 面板不透明度、圆角归零（14px 卡片弧套在约 10px 的窗口弧里会留下材质楔形）。材质在窗口终态矩形上绘制、无法动画，所以展开 / 收起仍然只动卡片的 `opacity` / `transform`（§9.5）。材质明暗跟系统暗色标志走，`applyNativeTheme()` 在启动前与 `themeMode` 变化时设置 `nativeTheme.themeSource`，否则深色主题会压在浅色玻璃上。
 - 无障碍：主题需通过对比度校验（正文 ≥ 4.5:1，次要文字 ≥ 3:1）；令牌文件里附一组对比度断言，由单测执行。
 - 标记窗口消费同一套令牌（独立作用域），保证"标记颜色 = 面板颜色"的视觉一致性。
 - **用户怎么选**：面板右上角 **◐**（`data-field="panel-settings"`）的弹层里放外观模式（`panel-mode-light|dark|system`）、主题（`panel-theme-minimal|graphite`）与不透明度滑杆。控件读的是**偏好**（设置行里的 `themeMode`，含 `system`），不是已经解析过的 `boot.mode`——后者在跟随系统时永远是 light/dark，"我当初选了哪一个"只在设置行里。写入走 `settings:set`，`themeMode` / `themeId` 变化时主进程 `broadcastTheme()` 把新的 `resolveBoot` 推给所有窗口（§9.7 的 `event:theme-changed`），面板与详情窗各自 `applyBootParams` 换根属性。预热中的详情窗也订阅这条事件——它比点击更早加载页面，不重画就会带着预热时的令牌出现在另一套配色里。
@@ -487,12 +488,12 @@ theme: { extend: { colors: {
 | 参数 | 标记窗口 | 面板窗口 | 提醒弹窗（M04） |
 |---|---|---|---|
 | 尺寸 | 美术尺寸（`MARKER_ARTWORK`）：圆点 28×28；胶囊 56×28；图标 40×40；随 `markerScale` 缩放 0.8–1.5。**窗口尺寸 = max(美术尺寸, 平台下限)**，win32 下限 32×39（§9.1.1），darwin 无下限 | 宽 320–640，高 420–900，默认 380×560 | 固定 340×124（`REMINDER_POPUP_SIZE`，不可缩放） |
-| `frame` / `transparent` | `false` / `true` | `false` / `true` | `false` / `true` |
-| `backgroundColor` | `#00000000` | 主题底色（避免首帧闪白） | `#00000000` |
+| `frame` / `transparent` | `false` / `true` | `false` / `true`；有系统材质时 `false` + `transparent: false`（§7） | `false` / 同上 |
+| `backgroundColor` | `#00000000` | `#00000000`（材质窗口里它是"透明"，背景由系统材质提供） | `#00000000` |
 | `skipTaskbar` | `true` | `true` | `true` |
 | `focusable` | `false`（不抢焦点） | `true` | `true`，但只用 `showInactive()` 显示（不抢光标，§5.3.2） |
 | `alwaysOnTop` | `true`（macOS 用 `setAlwaysOnTop(true, 'screen-saver')`；Windows 层面参数无效，用顶层置顶） | `true` 写死（无开关，见 §9.9） | `true` 写死（没人应答的通知不能被盖住） |
-| `hasShadow` / `roundedCorners` | `false` / 系统默认 | 由 CSS 画圆角与阴影 | `false` / `false`（圆角与阴影由 CSS 画） |
+| `hasShadow` / `roundedCorners` | `false` / 系统默认 | 无材质：由 CSS 画圆角与阴影（`false` / `false`）；有材质：`true` / `true`，形状与投影交给系统 | 同面板 |
 | macOS 额外项 | `acceptFirstMouse: true`、`type: 'panel'`、`visibleOnAllWorkspaces(true, { visibleOnFullScreen: true })` | 同左（`type` 视情况） | 同左（`type: 'panel'`） |
 | 其他 | `resizable: false`、`maximizable: false`、`fullscreenable: false` | `resizable: false`，`movable: false`（位置由程序计算） | `resizable: false`、`maximizable: false`、`minimizable: false`、`spellcheck: false`；每实例一个窗口，位置由 `placeReminderPopup` 算出 |
 

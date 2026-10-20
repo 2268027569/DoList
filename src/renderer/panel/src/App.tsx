@@ -136,7 +136,7 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
   };
 
   return (
-    <div className="flex h-full w-full p-2">
+    <div className="window-frame flex h-full w-full p-2">
       <section
         className="panel-card relative flex h-full w-full flex-col gap-3 overflow-hidden rounded-[var(--panel-radius)] border border-[var(--border-default)] px-[var(--panel-padding)] py-[var(--panel-padding)] shadow-[var(--panel-shadow)]"
         data-phase={open ? 'open' : 'closed'}

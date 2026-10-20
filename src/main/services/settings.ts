@@ -11,6 +11,7 @@ import { FALLBACK_LOCALE, LOCALES } from '@shared/i18n/resources';
 import type { BootParams, MarkerAnchor, ThemeMode } from '@shared/types/app';
 import { readRawSetting, writeRawSetting } from '../db/repositories/settings';
 import { createLogger } from '../logger';
+import { windowGlassSupported } from '../platform/window-material';
 
 const log = createLogger('services/settings');
 
@@ -46,6 +47,20 @@ export function resolveThemeMode(setting: AppSettings['themeMode']): ThemeMode {
   return setting;
 }
 
+/**
+ * Puts the OS on the same side as the app, so the window material behind the cards
+ * is drawn in the tint the cards are drawn in.
+ *
+ * Windows builds the acrylic backdrop from the system (or per-window) dark-mode
+ * flag, and Electron takes that flag from `nativeTheme`. Without this, choosing the
+ * dark theme on a light desktop would put a dark card over light glass — the surface
+ * reads as washed-out grey instead of glass. `system` is passed through unchanged,
+ * because that is exactly what the setting asks for.
+ */
+export function applyNativeTheme(): void {
+  nativeTheme.themeSource = appSettings().themeMode;
+}
+
 /** Locale resolution order: stored setting -> OS locale -> fallback (§8). */
 export function resolveLocale(setting: string): string {
   if (isShipped(setting)) return setting;
@@ -69,6 +84,10 @@ export function resolveBoot(smoke: boolean): BootParams {
     theme: settings.themeId,
     locale: resolveLocale(settings.locale),
     panelOpacity: settings.panelOpacity,
+    // Not a setting: the OS either can draw a backdrop or it cannot. The renderers
+    // need the answer before their first paint, because a glass window has no margin
+    // for the card's shadow and fills the whole window (§7).
+    glass: windowGlassSupported(),
   };
   if (smoke) boot.smoke = true;
   return boot;

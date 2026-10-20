@@ -83,7 +83,7 @@ export function ReminderPopup({ payload, locale, smoke }: ReminderPopupProps): R
   };
 
   return (
-    <div className="flex h-full w-full p-2">
+    <div className="window-frame flex h-full w-full p-2">
       <section
         // The names the smoke harness looks for in the DOM (§13): the popup is asserted
         // to have been drawn, not only to have been announced.

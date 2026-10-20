@@ -280,4 +280,14 @@
 - 冒烟：`smoke:tasks` 86 → **89 项**，phase 12 后半段重写。附着方式从"只挑面板 target"改成**按入口名**（`/panel/index.html` / `/reminder/index.html`）——弹窗是第二个 CDP target，读它必须开自己的 socket（`attachEntry` / `waitForReminderPopup`，后者额外等 `[data-field="reminder-card"]` 真画出来，因为窗口出现和卡片画出不是同一个时刻）。新增断言：弹窗画在自己的窗口里且 `data-reminder-id` 与事件一致 → **期间没有任何 `panel-expanded`**（"不展开面板"是量出来的）→ 计算样式只动 `opacity` / `transform` 且有正时长 → 文案把 `{time}` 换成了真日期（ICU 注册漏了会在这里现形）→ 「知道了」应答、任务仍非 `done`、窗口消失 → 换一档提前量重新武装后按「完成」：任务变 `done`、`reminder-popup-burst` 与应答同属一个实例、窗口消失 → 两个实例各自"播报一次、应答一次" → 最后两行都非 `pending`。冒烟与 dev 的 Electron 残留仍是假失败的头号原因，跑前先确认没有残留进程
 - 文档同步：[ARCHITECTURE.md](docs/ARCHITECTURE.md) §2 三个渲染入口与产物清单、§5.3.2 交付面改写、§6.4 两条通道、§9.1 窗口参数表新增"提醒弹窗"一列；[FEATURES.md](docs/FEATURES.md) M04 表中「内置兜底卡片」改为「独立提醒弹窗」并更新进度段与质量门数字
 
+### M07 系统毛玻璃（2026-10-21）
+
+- 面板、详情、提醒弹窗三个窗口改用**系统级磨砂**：Windows 用 `backgroundMaterial: 'acrylic'`（Win11 22H2 / build 22621 起），macOS 用 `vibrancy: 'under-window'` + `visualEffectState: 'active'`。这不是 CSS `backdrop-filter`——窗口本身是透明的，页面后面没有可模糊的东西，只有让系统在窗口**底下**画材质才成立
+- 有材质的窗口**不能是 `transparent: true`**：分层窗口带不了 DWM 材质，硬要只会得到一块黑矩形。所以玻璃路径是 `transparent: false` + `backgroundColor: '#00000000'` + `roundedCorners: true`（圆角由窗口给），`hasShadow` 也从 `false` 改为 `true`——材质窗口是普通形状窗口，DWM 可以像别的窗口那样给它投影，而原来的 8px CSS 外边距与 `--panel-shadow` 正是替代品
+- 支持能力与窗口参数都收在 `main/platform/window-material.ts`（`windowGlassSupported` / `windowMaterialOptions`），三个窗口共用一份，低版本 Windows 与 Linux 自动退回原来的透明窗口，行为不变
+- 渲染层按 `data-material="glass|flat"` 分流（boot 参数 `glass=1` → `applyBootParams` 写根属性，主进程按 OS 构建号决定，不设开关）：玻璃时 `.window-frame` 的 8px 内边距归零（卡片填满窗口，也让系统的圆角生效），卡片的底色从"满不透明度"降到 **50% × 面板不透明度**，让材质透出来；卡片自身圆角在玻璃下归零——14px 的卡片曲线套在约 10px 的窗口曲线里，每个角都会留下一块没被盖住的材质楔形。不透明度滑杆仍然有效，只是它的上限变成"半透"，不再能调到全不透明
+- **`applyNativeTheme`**：材质的明暗由系统暗色标志决定，Electron 从 `nativeTheme` 取。启动前与 `themeMode` 每次变化时把 `nativeTheme.themeSource` 设成应用的外观模式（`system` 原样传下去），否则在浅色桌面上选深色主题会得到"深色卡片压在浅色玻璃上"的一片灰
+- 单测 290 → **292 例**（`boot.test.ts` 补 `glass` 参数的解析与 `bootQuery` 往返）；`lint` / `typecheck` / `i18n:check` / `build` / `smoke:tasks` / `smoke:marker` 全绿
+- 已知取舍：系统材质在窗口的最终矩形上绘制，**没有可动画的尺寸**，所以展开 / 收起的 200/180ms 动画仍然只动卡片（内容与 50% 填充），材质那一层是直接就位的；换成逐帧 `setBounds` 会违反 §9.5 的低功耗纪律
+
 [Unreleased]: https://github.com/2268027569/DoList/commits/main

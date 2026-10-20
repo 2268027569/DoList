@@ -14,7 +14,7 @@ body,
 }
 
 body {
-  /* Both windows are transparent: the surface is painted by the entry itself. */
+  /* The entry paints its own surface; on a glass window the OS material sits behind it. */
   background: transparent;
   font-family: var(--font-sans);
   color: var(--text-primary);
@@ -27,6 +27,40 @@ body {
 
 * {
   box-sizing: border-box;
+}
+
+/*
+ * Frosted glass (M07, docs/ARCHITECTURE.md §7).
+ *
+ * The windows ask the OS for a material — Windows acrylic, macOS vibrancy — and the
+ * card then sits on top of it. That changes two things the card cannot guess:
+ *
+ * - The 8px margin around the card existed for the CSS shadow to fall into. On a glass
+ *   window there is no outside to fall into: the OS rounds the window itself, so the
+ *   card fills it and the material is what shows at the corners and in every gap.
+ * - The surface is mixed at 68% rather than the slider's full value, because the
+ *   material behind it is the point — an opaque card would hide the blur entirely.
+ *   `--panel-opacity` still multiplies in, so the slider keeps working on glass.
+ *
+ * Non-glass machines (older Windows, Linux) keep the old transparent window, margin
+ * and shadow; nothing here applies to them.
+ */
+:root[data-material='glass'] .window-frame {
+  padding: 0;
+}
+
+:root[data-material='glass'] .panel-card,
+:root[data-material='glass'] .detail-card,
+:root[data-material='glass'] .reminder-popup {
+  background-color: color-mix(
+    in srgb,
+    var(--bg-surface) calc(var(--panel-opacity, 1) * 50%),
+    transparent
+  );
+  /* One rounding, and it is the window's: a 14px card curve inside the OS's ~10px
+     window curve would leave a wedge of raw material in each corner. */
+  border-radius: 0;
+  box-shadow: none;
 }
 
 :focus-visible {

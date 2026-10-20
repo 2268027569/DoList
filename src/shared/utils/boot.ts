@@ -96,6 +96,7 @@ export function parseBootParams(search: string): BootParams {
   if (panelOpacity !== undefined) parsed.panelOpacity = panelOpacity;
   const marker = parseMarkerAppearance(params.get('marker'));
   if (marker !== undefined) parsed.marker = marker;
+  if (params.get('glass') === '1') parsed.glass = true;
   if (params.get('smoke') === '1') parsed.smoke = true;
   return parsed;
 }
@@ -115,6 +116,7 @@ export function bootQuery(params: BootParams): Record<string, string> {
     locale: params.locale,
   };
   if (params.panelOpacity !== undefined) query['panelOpacity'] = String(params.panelOpacity);
+  if (params.glass === true) query['glass'] = '1';
   if (params.marker) query['marker'] = encodeMarkerAppearance(params.marker);
   if (params.smoke) query['smoke'] = '1';
   return query;

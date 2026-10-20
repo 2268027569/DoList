@@ -44,6 +44,11 @@ describe('parseBootParams', () => {
       opacity: 0.4,
     });
   });
+
+  it('reads the glass flag only when the main process said the window has a material', () => {
+    expect(parseBootParams('?glass=1').glass).toBe(true);
+    expect(parseBootParams('?glass=0').glass).toBeUndefined();
+  });
 });
 
 describe('bootQuery', () => {
@@ -61,5 +66,10 @@ describe('bootQuery', () => {
 
   it('omits the marker token for the panel entry', () => {
     expect(bootQuery(DEFAULT_BOOT)).not.toHaveProperty('marker');
+  });
+
+  it('carries the glass flag, and leaves it out when the window paints its own surface', () => {
+    expect(bootQuery({ ...DEFAULT_BOOT, glass: true }).glass).toBe('1');
+    expect(bootQuery(DEFAULT_BOOT)).not.toHaveProperty('glass');
   });
 });

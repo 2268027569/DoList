@@ -13,12 +13,16 @@ export function readBoot(): BootParams {
 
 /**
  * Writes boot parameters onto the document root: `data-mode` selects light/dark,
- * `data-theme` selects the token set and `dir` handles RTL (§7, §8).
+ * `data-theme` selects the token set, `data-material` says whether the OS draws a
+ * backdrop behind the window, and `dir` handles RTL (§7, §8).
  */
 export function applyBootParams(params: BootParams): void {
   const root = document.documentElement;
   root.dataset['mode'] = params.mode;
   root.dataset['theme'] = params.theme;
+  // `glass` is decided by the main process from the OS build, so the stylesheet does
+  // not have to guess what the window behind it is drawn on (§7).
+  root.dataset['material'] = params.glass === true ? 'glass' : 'flat';
   root.lang = params.locale;
   root.dir = params.locale.startsWith('ar') ? 'rtl' : 'ltr';
 }

@@ -4,13 +4,13 @@ import { join } from 'node:path';
 import { IPC } from '@shared/contracts/channels';
 import { DETAIL_TASK_QUERY_KEY } from '@shared/contracts/detail';
 import { panelSizeOf } from '@shared/contracts/settings';
-import { TRANSPARENT_WINDOW_BACKGROUND } from '@shared/theme/window-background';
 import { placePanel, placeTaskDetail } from '@shared/utils/anchoring';
 import { clampPanelSize, PANEL_SIZE } from '@shared/utils/panel-geometry';
 import type { BootParams, Rect } from '@shared/types/app';
 import type { Size } from '@shared/utils/marker-geometry';
 import { createLogger } from '../logger';
 import { isSmokeEnabled, smokeRecord } from '../platform/smoke';
+import { windowMaterialOptions } from '../platform/window-material';
 import { appSettings } from '../services/settings';
 import { loadRenderer } from './load-renderer';
 import { onMarkerMoved } from './marker';
@@ -323,16 +323,15 @@ function buildWindow(): BrowserWindow {
     height: size.height,
     show: false,
     frame: false,
-    transparent: true,
-    backgroundColor: TRANSPARENT_WINDOW_BACKGROUND,
+    // Same material as the panel it sits beside: the pair has to read as one
+    // assembly, and a luminous card next to a frosted one would not (M07).
+    ...windowMaterialOptions(boot?.glass === true),
     resizable: false,
     maximizable: false,
     minimizable: false,
     fullscreenable: false,
     skipTaskbar: true,
     alwaysOnTop: true,
-    hasShadow: false,
-    roundedCorners: false,
     ...(process.platform === 'win32' ? { thickFrame: false } : {}),
     ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
     webPreferences: {

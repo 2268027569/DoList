@@ -128,7 +128,7 @@ function DetailWindow({ taskId }: { taskId: string | null }): ReactElement {
   }, []);
 
   return (
-    <div className="flex h-full w-full p-2">
+    <div className="window-frame flex h-full w-full p-2">
       <section
         className="detail-card flex h-full w-full flex-col overflow-hidden rounded-[var(--panel-radius)] border border-[var(--border-default)] shadow-[var(--panel-shadow)]"
         data-phase={phase}
