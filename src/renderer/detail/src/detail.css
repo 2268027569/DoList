@@ -87,3 +87,43 @@
     transition-duration: 1ms !important;
   }
 }
+
+/* ------------------------------------------------------------------ the form */
+
+/*
+ * The one control surface the form draws: a filled block with an edge that only appears
+ * when it is wanted.
+ *
+ * The global `:focus-visible` rule in the base layer is a 2px accent box, which is right
+ * for a button and wrong for a text field: on a soft filled block it reads as a
+ * highlighter drawn around the words. The edge below says the same thing — "this is where
+ * the keyboard is" — in the field's own geometry, and the soft ring uses the accent's
+ * 18% tint so the colour stays one hue instead of becoming a frame.
+ */
+.detail-field:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+/* Hover says the same thing one step earlier, in the neutral the border default is. */
+.detail-field:hover:not(:focus-visible) {
+  border-color: var(--border-default);
+}
+
+/*
+ * The title is content that happens to be editable, not a field of the form: it stays
+ * plain text until the pointer or the caret arrives, and then the surface behind it
+ * appears. That is the whole affordance — no underline, no box, nothing competing with
+ * the words themselves (the previous bottom border in the accent colour drew a bright
+ * marker stroke under the task's name, which is the loudest possible place for it).
+ */
+.detail-title:hover,
+.detail-title:focus-visible {
+  background-color: var(--bg-surface-muted);
+}
+
+.detail-title:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+}
