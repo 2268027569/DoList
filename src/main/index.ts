@@ -20,6 +20,7 @@ import { appSettings, resolveBoot } from './services/settings';
 import { reconcileReminders } from './services/tasks';
 import { createMarkerWindow } from './windows/marker';
 import { createPanelWindow, expandPanel } from './windows/panel';
+import { configureReminderWindows } from './windows/reminder';
 
 const log = createLogger('bootstrap');
 
@@ -81,9 +82,12 @@ async function start(): Promise<void> {
   log('===== group 4/6 · ipc handlers');
   registerIpcHandlers();
 
-  log('===== group 5/6 · windows (marker + panel)');
+  log('===== group 5/6 · windows (marker + panel + reminder)');
   createMarkerWindow(boot);
   createPanelWindow(boot);
+  // The popup is placed from the marker's rectangle and has to follow it, so it is
+  // configured after the marker exists and before anything can be announced (§5.3).
+  configureReminderWindows(boot);
 
   log('===== group 6/6 · system integration (tray, shortcuts, theme, reminders)');
   createTray();

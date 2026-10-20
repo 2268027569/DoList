@@ -9,7 +9,8 @@ import { createLogger } from '../logger';
 import { setReminderState } from '../db/repositories/reminders';
 import { readTask } from '../services/tasks';
 import { isSmokeEnabled, smokeRecord } from './smoke';
-import { expandPanelForReminder, expandPanelForTask } from '../windows/panel';
+import { expandPanelForTask } from '../windows/panel';
+import { closeAllReminderWindows, closeReminderWindow, showReminderWindow } from '../windows/reminder';
 
 const log = createLogger('platform/notifications');
 
@@ -23,21 +24,22 @@ const log = createLogger('platform/notifications');
  *      which reaches the user wherever they are and survives this app being in the
  *      background; then
  *   2. several minutes later, if that one is still unanswered, the app's own
- *      always-on-top card, which the OS cannot take away.
+ *      always-on-top popup window (windows/reminder.ts), which the OS cannot take
+ *      away and which does **not** unfold the panel over what the user is doing.
  *
  * **The two never both speak.** A reminder is one instance with one row, and that row
  * is the whole coordination: answering the toast marks the instance `dismissed`, and
- * the card's timer reads that before it opens anything. Answering the card shuts the
+ * the popup's timer reads that before it opens anything. Answering the popup shuts the
  * toast down — on the desktop it is still sitting there — so there is no half-answered
  * pair to clean up (M04 D2).
  *
- * This is the layer that owns every OS call — `Notification`, the panel window — which
+ * This is the layer that owns every OS call — `Notification`, the reminder window — which
  * is why the scheduler above it takes a `deliver` callback instead of importing any of
  * this. The timing rules stay unit-tested; this stays the part that needs a desktop.
  */
 
 /**
- * How long the toast is given before the card takes over. Long enough for "I saw it
+ * How long the toast is given before the popup takes over. Long enough for "I saw it
  * and dealt with it" and short enough that a user who did not see it is not left
  * alone with a task they are about to miss.
  */
@@ -55,7 +57,7 @@ interface OpenReminder {
   reminder: Reminder;
   /** The toast, while it is still up; `null` when the platform had none to offer. */
   toast: Notification | null;
-  /** The fallback card's timer. Cleared the moment the reminder is answered. */
+  /** The fallback popup's timer. Cleared the moment the reminder is answered. */
   cardTimer: NodeJS.Timeout | null;
 }
 
@@ -94,14 +96,18 @@ export function deliverReminder(reminder: Reminder, task: TaskWithTags | null): 
 }
 
 /**
- * The user answered a reminder — from the panel's card, or from the toast's click.
+ * The user answered a reminder — by clicking the OS notification, or from the popup.
  *
  * This is the one answer both paths funnel into, and it is what the dedup is written
  * on: the instance moves to `dismissed` and everything still open for it is taken
- * down. Answering twice (a click that lands as the card is opening) finds nothing left
+ * down. Answering twice (a click that lands as the popup opens) finds nothing left
  * to do and is not an error.
+ *
+ * The popup is closed unconditionally, even when the instance had already moved: it is
+ * the same instance either way, and a window left standing for a reminder that has been
+ * dealt with is a stale announcement.
  */
-export function answerReminder(id: string, by: 'card' | 'toast'): boolean {
+export function answerReminder(id: string, by: 'popup' | 'toast'): boolean {
   const entry = open.get(id);
   if (entry !== undefined) {
     if (entry.cardTimer !== null) clearTimeout(entry.cardTimer);
@@ -111,30 +117,32 @@ export function answerReminder(id: string, by: 'card' | 'toast'): boolean {
     entry.toast?.close();
     open.delete(id);
   }
+  closeReminderWindow(id);
 
   const moved = setReminderState(id, 'dismissed');
   if (moved) smokeRecord('reminder-answered', { id, by });
   return moved;
 }
 
-/** Drops everything open, so a quitting process leaves no timers behind. */
+/** Drops everything open, so a quitting process leaves no timers or windows behind. */
 export function closeAllReminderSurfaces(): void {
   for (const entry of open.values()) {
     if (entry.cardTimer !== null) clearTimeout(entry.cardTimer);
     entry.toast?.close();
   }
   open.clear();
+  closeAllReminderWindows();
 }
 
 /**
  * The toast, when the platform can draw one. `Notification.isSupported()` is false on
  * a Windows build with notifications turned off and on a macOS session with no
- * notification centre — the card is then the only surface there is, and it arrives on
+ * notification centre — the popup is then the only surface there is, and it arrives on
  * the same timer as usual rather than being skipped.
  */
 function showToast(reminder: Reminder, task: TaskWithTags): Notification | null {
   if (!Notification.isSupported()) {
-    log('platform has no notifications; the card is the only surface');
+    log('platform has no notifications; the popup is the only surface');
     return null;
   }
 
@@ -143,7 +151,7 @@ function showToast(reminder: Reminder, task: TaskWithTags): Notification | null 
     body: notificationBody(task),
     silent: false,
   });
-  // Clicking it is an answer: the user has been reached, so the card must not follow.
+  // Clicking it is an answer: the user has been reached, so the popup must not follow.
   toast.on('click', () => {
     if (!answerReminder(reminder.id, 'toast')) return;
     // And it opens the task, which is why the click is worth having at all — the
@@ -161,11 +169,15 @@ function notificationBody(task: TaskWithTags): string {
 }
 
 /**
- * The fallback: the in-app card, several minutes after a toast nobody answered.
+ * The fallback: the popup window, several minutes after a toast nobody answered.
  *
- * Reading the row again before opening anything is the dedup — the toast may have been
- * clicked while this timer was in flight, and an instance that is no longer `fired`
- * has already been answered, so there is nothing to say.
+ * It is a window of its own rather than a card inside the panel, because the panel is
+ * where the user works and this announcement exists precisely for the case where they
+ * are working on something else (M04).
+ *
+ * Reading the entry again before opening anything is the dedup — the toast may have been
+ * clicked while this timer was in flight, which deletes the entry and cancels this timer,
+ * so an announcement that has already been answered has nothing left to open.
  */
 function openCard(id: string): void {
   const entry = open.get(id);
@@ -177,16 +189,16 @@ function openCard(id: string): void {
 
   const task = readTask(entry.reminder.taskId);
   if (task === null) {
-    answerReminder(id, 'card');
+    answerReminder(id, 'popup');
     return;
   }
 
-  expandPanelForReminder({
+  showReminderWindow({
     id,
     taskId: entry.reminder.taskId,
     title: task.title,
     dueAt: task.dueAt,
   });
   smokeRecord('reminder-card', { id, taskId: entry.reminder.taskId });
-  log('reminder card shown', { id });
+  log('reminder popup shown', { id });
 }

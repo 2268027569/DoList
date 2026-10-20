@@ -199,17 +199,18 @@ function sendHotkey(hotkey, compileCheck) {
  */
 const CDP_PORT = process.env.YICHEN_SMOKE_CDP_PORT ?? '9222';
 
-/** The panel page's debugger address, retried while the app is still coming up. */
-async function panelTarget(timeoutMs) {
+/** One renderer entry's debugger address, retried while the app is still coming up. */
+async function entryTarget(entry, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`);
       const targets = await response.json();
-      const panel = targets.find(
-        (entry) => entry.type === 'page' && entry.url.split('?')[0].endsWith('/panel/index.html'),
+      const wanted = targets.find(
+        (each) =>
+          each.type === 'page' && each.url.split('?')[0].endsWith(`/${entry}/index.html`),
       );
-      if (panel !== undefined) return panel;
+      if (wanted !== undefined) return wanted;
     } catch {
       // The port is not listening yet; the app is still starting.
     }
@@ -218,15 +219,20 @@ async function panelTarget(timeoutMs) {
   return null;
 }
 
-/** Attaches to the panel page and returns a client, or `null` if it never appeared. */
-async function attachPanel(timeoutMs = 20_000) {
-  const target = await panelTarget(timeoutMs);
+/**
+ * One renderer entry's page, found by entry name (`/panel/index.html`,
+ * `/reminder/index.html`) rather than by order in the target list — the reminder popup
+ * is a window of its own, so a run that wants to read it cannot use the panel's socket
+ * and must attach to a second target (phase 12, M04).
+ */
+async function attachEntry(entry, timeoutMs = 20_000) {
+  const target = await entryTarget(entry, timeoutMs);
   if (target === null) return null;
 
   const socket = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     socket.addEventListener('open', resolve, { once: true });
-    socket.addEventListener('error', () => reject(new Error('the panel socket refused')), {
+    socket.addEventListener('error', () => reject(new Error(`${entry} socket refused`)), {
       once: true,
     });
   });
@@ -240,11 +246,11 @@ async function attachPanel(timeoutMs = 20_000) {
     } catch {
       return;
     }
-    const entry = pending.get(message.id);
-    if (entry === undefined) return;
+    const entry_ = pending.get(message.id);
+    if (entry_ === undefined) return;
     pending.delete(message.id);
-    if (message.error !== undefined) entry.reject(new Error(message.error.message));
-    else entry.resolve(message.result);
+    if (message.error !== undefined) entry_.reject(new Error(message.error.message));
+    else entry_.resolve(message.result);
   });
 
   const send = (method, params) =>
@@ -256,6 +262,52 @@ async function attachPanel(timeoutMs = 20_000) {
     });
 
   return { send, close: () => socket.close() };
+}
+
+/** Attaches to the panel page and returns a client, or `null` if it never appeared. */
+async function attachPanel(timeoutMs = 20_000) {
+  return attachEntry('panel', timeoutMs);
+}
+
+/**
+ * Attaches to the popup for one task **and** waits for its card to be drawn (M04).
+ *
+ * The two are not the same wait. The window appears as soon as the main process creates
+ * it, and the card a moment later — its page is a renderer of its own, which boots, reads
+ * the payload and only then paints — so a phase that presses one of its buttons has to
+ * wait for the DOM rather than for the window. The card is read here as well, so the
+ * caller gets the popup's own account of what it drew.
+ */
+async function waitForReminderPopup(taskId, timeoutMs = 12_000) {
+  const deadline = Date.now() + timeoutMs;
+  let popup = null;
+  while (Date.now() < deadline) {
+    if (popup === null) popup = await attachEntry('reminder', 2_000);
+    if (popup !== null) {
+      let card;
+      try {
+        card = await evaluate(
+          popup,
+          `(() => {
+             const node = document.querySelector('[data-field="reminder-card"]');
+             if (node === null) return null;
+             return {
+               taskId: node.dataset.taskId,
+               reminderId: node.dataset.reminderId,
+               phase: node.dataset.phase,
+               text: node.textContent,
+             };
+           })()`,
+        );
+      } catch {
+        // The window closed under us (answered elsewhere); the caller's own checks say so.
+        return { popup, card: null };
+      }
+      if (card !== null && card.taskId === taskId) return { popup, card };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return { popup, card: null };
 }
 
 /** Runs an expression in the panel page and returns its value. */
@@ -505,30 +557,6 @@ async function gotoAttachmentField(cdp, field, attachmentId) {
     fail(`the panel has no focusable "${field}" on attachment ${attachmentId}`);
   }
   return landed;
-}
-
-/**
- * What the panel itself says about one named control: whether it is on screen, and the
- * `data-` attributes it carries (M04).
- *
- * The reminder card is asserted through the DOM and not only through the event that
- * announced it: an event proves the main process spoke, and what the phase cares about
- * is that something was drawn for the user to read.
- */
-async function readField(cdp, field) {
-  return evaluate(
-    cdp,
-    `(() => {
-       const node = document.querySelector('[data-field="${field}"]');
-       if (node === null) return null;
-       return {
-         field: node.dataset.field ?? null,
-         taskId: node.dataset.taskId ?? null,
-         reminderId: node.dataset.reminderId ?? null,
-         text: node.textContent,
-       };
-     })()`,
-  );
 }
 
 /**
@@ -937,6 +965,12 @@ async function main() {
   let child = launchApp(electronBinary, smokeDir);
   /** The panel page, once the app is up; reassigned on the restart in phase 5. */
   let cdp = null;
+  /**
+   * The fallback popups' pages (M04). They are their own windows, so reading them means
+   * their own sockets — tracked here because a socket left open keeps the harness alive
+   * after the last check.
+   */
+  const popups = [];
 
   try {
     // --- phase 0: boot --------------------------------------------------------
@@ -2146,101 +2180,212 @@ async function main() {
       );
     }
 
-    // The fallback card, several minutes after the toast in the app and a couple of
-    // seconds under the harness — the same timer either way. It is read off the DOM as
-    // well as the event: the phase cares that something was drawn, not only that the
-    // main process decided to draw it.
+    // The fallback popup, several minutes after the toast in the app and a couple of
+    // seconds under the harness — the same timer either way. It is read off its own
+    // page this time: the announcement is a window of its own (M04), so the phase has
+    // to prove *that* was drawn rather than that the main process meant to draw it.
     const cardEvent = await waitForEvent('reminder-card', REMINDER_CARD_TIMEOUT_MS, leadSince);
-    const cardField = await waitForEval(
-      cdp,
-      `(() => {
-         const node = document.querySelector('[data-field="reminder-card"]');
-         if (node === null) return null;
-         return { taskId: node.dataset.taskId, reminderId: node.dataset.reminderId };
-       })()`,
-      REMINDER_CARD_TIMEOUT_MS,
-    );
+    const first = await waitForReminderPopup(remindRow.id, REMINDER_CARD_TIMEOUT_MS + 6_000);
+    if (first.popup !== null) popups.push(first.popup);
+    if (first.card === null) {
+      fail(`the fallback reminder never drew a popup for ${remindRow.id}`);
+      return;
+    }
+    const popup = first.popup;
+    const cardField = first.card;
     if (
       cardEvent?.detail?.taskId === remindRow.id &&
       cardField?.taskId === remindRow.id &&
       cardField?.reminderId === cardEvent?.detail?.id
     ) {
-      pass('an unanswered toast was followed by the in-app card, on the same instance', {
+      pass('an unanswered toast was followed by a popup of its own, on the same instance', {
         taskId: cardField.taskId,
       });
     } else {
       fail(
-        `the card event said ${JSON.stringify(cardEvent?.detail ?? null)} and the panel drew ` +
+        `the popup event said ${JSON.stringify(cardEvent?.detail ?? null)} and the popup drew ` +
           `${JSON.stringify(cardField ?? null)}`,
       );
     }
 
-    // Answering it is what closes the pair out. The card's own button is the path a
-    // user takes, so the phase presses that rather than the panel's internals.
-    const cardText = await readField(cdp, 'reminder-card');
-    if (cardText?.text?.includes(REMINDER_TASK) === true) {
-      pass('the card named the task it is about', { text: cardText.text });
+    // The popup is not the panel: an unanswered notification must not unfold the panel
+    // over whatever the user was doing. That is the whole reason the fallback surface is
+    // a window of its own, so it is measured — no panel open happened around the
+    // reminder, in this case that used to open one (M04).
+    const expandedForReminder = (readStatus()?.events ?? []).filter(
+      (entry) => entry.type === 'panel-expanded' && entry.at >= leadSince,
+    );
+    if (expandedForReminder.length === 0) {
+      pass('the fallback reminder did not expand the panel: it is a window of its own');
     } else {
-      fail(`the card reads ${JSON.stringify(cardText?.text ?? null)}`);
+      fail(`the panel was expanded ${expandedForReminder.length} time(s) around the reminder`);
     }
 
-    await gotoField(cdp, 'reminder-dismiss');
-    const answerSince = Date.now();
-    await pressKey(cdp, 'Enter');
-    const answered = await waitForEvent('reminder-answered', 8_000, answerSince);
-    const afterAnswer = readReminders(remindRow.id);
-    const cardGone = await waitForEval(
-      cdp,
-      `document.querySelector('[data-field="reminder-card"]') === null ? true : null`,
-      3_000,
+    // Its ease-in: the card mounts at "entering" and is flipped to "open" on the next
+    // frame, and what moves is only opacity and transform — the window was already sized
+    // and placed, so the animation never touches bounds (M04, §7, §9.1).
+    const easing = await evaluate(
+      popup,
+      `(() => {
+         const node = document.querySelector('[data-field="reminder-card"]');
+         if (node === null) return null;
+         const style = getComputedStyle(node);
+         return {
+           phase: node.dataset.phase,
+           property: style.transitionProperty,
+           duration: style.transitionDuration,
+         };
+       })()`,
     );
     if (
-      answered?.detail?.id === cardEvent?.detail?.id &&
-      answered?.detail?.by === 'card' &&
-      afterAnswer.length === 1 &&
-      afterAnswer[0].state === 'dismissed' &&
-      cardGone === true
+      easing?.phase === 'open' &&
+      easing.property.includes('opacity') &&
+      easing.property.includes('transform') &&
+      easing.property !== 'all' &&
+      Number.parseFloat(easing.duration) > 0
     ) {
-      pass('answering the card dismissed the instance and took the card off screen', {
-        id: answered.detail.id,
-        state: afterAnswer[0].state,
+      pass('the popup eased in, on opacity and transform alone', {
+        property: easing.property,
+        duration: easing.duration,
+      });
+    } else {
+      fail(`the popup card rests at ${JSON.stringify(easing ?? null)}`);
+    }
+
+    // The card names the task and says when it is due — and the due line is an
+    // interpolated one, so a literal `{time}` in it means the popup's i18n came up
+    // without ICU while the shipped strings are ICU-formatted (M04, §8).
+    if (cardField?.text?.includes(REMINDER_TASK) === true && !cardField.text.includes('{')) {
+      pass('the popup named the task it is about, with its due line filled in', {
+        text: cardField.text,
+      });
+    } else {
+      fail(`the popup reads ${JSON.stringify(cardField?.text ?? null)}`);
+    }
+
+    // 知道了: the answer that says "read, not dealt with" (M04). Pressed on the popup's
+    // own page, which is the path a user takes, and the panel keeps the task open.
+    await gotoField(popup, 'reminder-dismiss');
+    const dismissSince = Date.now();
+    await pressKey(popup, 'Enter');
+    const dismissed = await waitForEvent('reminder-answered', 8_000, dismissSince);
+    const afterDismiss = readReminders(remindRow.id);
+    const popupGone = (await entryTarget('reminder', 3_000)) === null;
+    if (
+      dismissed?.detail?.id === cardEvent?.detail?.id &&
+      dismissed?.detail?.by === 'popup' &&
+      afterDismiss.length === 1 &&
+      afterDismiss[0].state === 'dismissed' &&
+      readTasks().find((row) => row.id === remindRow.id)?.status !== 'done' &&
+      popupGone
+    ) {
+      pass('知道了 dismissed the instance, left the task alone and took the popup down', {
+        id: dismissed.detail.id,
+        state: afterDismiss[0].state,
       });
     } else {
       fail(
-        `answering the card produced ${JSON.stringify(answered?.detail ?? null)} with row ` +
-          `${JSON.stringify(afterAnswer)} and card-gone ${JSON.stringify(cardGone)}`,
+        `知道了 produced ${JSON.stringify(dismissed?.detail ?? null)} with rows ` +
+          `${JSON.stringify(afterDismiss)} and popup-gone ${JSON.stringify(popupGone)}`,
       );
     }
 
-    // The dedup, measured rather than assumed: over the whole run, exactly one card was
-    // raised for that instance and exactly one answer was recorded. A second card would
-    // mean the toast and the fallback both spoke; a second answer would mean the same
-    // instance was put away twice.
-    const events = readStatus()?.events ?? [];
-    const cards = events.filter(
-      (entry) => entry.type === 'reminder-card' && entry.detail?.id === cardEvent?.detail?.id,
+    // The second answer, on an instance of its own: the lead is moved so the new one has
+    // a moment to itself — a dismissed instance is not resurrected, and a pending one at
+    // the same instant would be refused (§5.3).
+    await gotoField(cdp, 'detail-remind-60');
+    const rearmSince = Date.now();
+    await pressKey(cdp, 'Enter');
+    await waitForEvent('task-changed', 8_000, rearmSince);
+
+    const doneEvent = await waitForEvent(
+      'reminder-card',
+      REMINDER_CARD_TIMEOUT_MS + 6_000,
+      rearmSince,
     );
-    const answers = events.filter(
-      (entry) => entry.type === 'reminder-answered' && entry.detail?.id === cardEvent?.detail?.id,
-    );
-    if (cards.length === 1 && answers.length === 1) {
-      pass('the instance was raised once and answered once: the two surfaces never both spoke', {
-        cards: cards.length,
-        answers: answers.length,
+    const rearmed = await waitForReminderPopup(remindRow.id, REMINDER_CARD_TIMEOUT_MS + 8_000);
+    if (rearmed.popup !== null) popups.push(rearmed.popup);
+    if (rearmed.card === null) {
+      fail(`the re-armed reminder never drew a popup for ${remindRow.id}`);
+      return;
+    }
+    const donePopup = rearmed.popup;
+
+    // 完成 is the popup's own write: the task is ticked off and the instance answered in
+    // the one command the channel carries (M04).
+    await gotoField(donePopup, 'reminder-done');
+    const doneSince = Date.now();
+    await pressKey(donePopup, 'Enter');
+    const answered = await waitForEvent('reminder-answered', 8_000, doneSince);
+    const burstEvent = await waitForEvent('reminder-popup-burst', 8_000, doneSince);
+    const doneRow = readTasks().find((row) => row.id === remindRow.id);
+    const afterDone = readReminders(remindRow.id);
+    const donePopupGone = (await entryTarget('reminder', 3_000)) === null;
+    if (
+      answered?.detail?.id === doneEvent?.detail?.id &&
+      answered?.detail?.by === 'popup' &&
+      // The effect is decoration, so it is reported rather than assumed: the popup sends
+      // its answer only after the burst has run (M04).
+      burstEvent?.detail?.id === doneEvent?.detail?.id &&
+      doneRow?.status === 'done' &&
+      afterDone.filter((row) => row.state === 'dismissed').length === 2 &&
+      donePopupGone
+    ) {
+      pass('完成 ticked the task off and burst on the way out', {
+        id: answered.detail.id,
+        status: doneRow.status,
       });
     } else {
-      fail(`the instance was raised ${cards.length} time(s) and answered ${answers.length} time(s)`);
+      fail(
+        `完成 produced ${JSON.stringify(answered?.detail ?? null)}, burst ` +
+          `${JSON.stringify(burstEvent?.detail ?? null)} with task ` +
+          `${JSON.stringify(doneRow?.status ?? null)} and rows ${JSON.stringify(afterDone)}`,
+      );
     }
 
-    // And nothing new was armed behind it: an answered instance is not rescheduled, so
-    // its row is the only one the task has.
-    if (readReminders(remindRow.id).length === 1) {
-      pass('an answered reminder was not re-armed: one instance, one row');
+    // The dedup, measured rather than assumed: each instance was raised once and answered
+    // once. A second card would mean the toast and the fallback both spoke; a second
+    // answer would mean the same instance was put away twice.
+    const events = readStatus()?.events ?? [];
+    const raisingCount = (id) =>
+      events.filter((entry) => entry.type === 'reminder-card' && entry.detail?.id === id).length;
+    const answerCount = (id) =>
+      events.filter((entry) => entry.type === 'reminder-answered' && entry.detail?.id === id).length;
+    const raisedId = cardEvent?.detail?.id;
+    const secondRaisedId = doneEvent?.detail?.id;
+    if (
+      raisedId !== undefined &&
+      secondRaisedId !== undefined &&
+      raisedId !== secondRaisedId &&
+      raisingCount(raisedId) === 1 &&
+      answerCount(raisedId) === 1 &&
+      raisingCount(secondRaisedId) === 1 &&
+      answerCount(secondRaisedId) === 1
+    ) {
+      pass('each instance was raised once and answered once: the two surfaces never both spoke', {
+        first: { raised: raisingCount(raisedId), answered: answerCount(raisedId) },
+        second: { raised: raisingCount(secondRaisedId), answered: answerCount(secondRaisedId) },
+      });
     } else {
-      fail(`the answered task has ${readReminders(remindRow.id).length} instances`);
+      fail(
+        `the instances were raised/answered ${JSON.stringify([
+          [raisingCount(raisedId), answerCount(raisedId)],
+          [raisingCount(secondRaisedId), answerCount(secondRaisedId)],
+        ])}`,
+      );
+    }
+
+    // And nothing new was armed behind them: an answered instance is not rescheduled, so
+    // the task keeps the two rows its two leads wrote and no waiting one.
+    const finalRows = readReminders(remindRow.id);
+    if (finalRows.length === 2 && finalRows.every((row) => row.state !== 'pending')) {
+      pass('the answered instances were not re-armed: two moments, two rows, none waiting');
+    } else {
+      fail(`the answered task has ${JSON.stringify(finalRows.map((row) => row.state))}`);
     }
   } finally {
     if (cdp !== null) cdp.close();
+    for (const popup of popups) popup.close();
     await new Promise((resolve) => setTimeout(resolve, 400));
     stopApp(child);
   }

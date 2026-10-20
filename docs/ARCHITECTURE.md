@@ -85,12 +85,14 @@ toDoList/
 
 **两条结构性决定**：
 
-1. **两个渲染入口**（`panel/index.html`、`marker/index.html`），不做单入口路由。标记页零依赖 React、零依赖 i18next，只加载约 23 kB 的 DOM + CSS + 静态文案，保证常驻内存与 CPU 最低。
+1. **三个渲染入口**（`panel/index.html`、`marker/index.html`、`reminder/index.html`），不做单入口路由。标记页零依赖 React、零依赖 i18next，只加载约 23 kB 的 DOM + CSS + 静态文案，保证常驻内存与 CPU 最低。提醒弹窗（M04）是第三个入口，也是一个独立窗口的页面：它只在提醒无人应答时出现，不跟着面板常驻，所以单列一份而不是塞进面板里（§5.3.2）。
 
    M0 实测产物：`marker.js 5.26 kB + marker.css 7.78 kB`（另需共享 i18n chunk 85.26 kB）、`panel.js 587.45 kB + panel.css 19.74 kB`、`main 377.85 kB`、`preload 3.36 kB`。
 
-   M01 实测产物：常驻标记路径为 `marker.js 7.15 kB + marker.css 10.98 kB + common chunk 5.10 kB = 23.23 kB`（形态/角标/进度环与拖拽桥都在其中），i18next 已完全移出常驻路径，只随面板打包（`panel.js 587.45 → 673.04 kB`、`panel.css 19.74 → 21.80 kB`）；`main 384.07 kB`、`preload 3.74 kB`。ICU 打包（78.13 kB，`es-*.js`）仍由 i18next-icu 动态 import 承担，只有面板按需加载。
-2. **`src/shared` 只放纯函数与类型**，不 import `electron`、不 import Node 内置模块；这样吸附算法、RRULE、格式化函数可以直接被 Vitest 单测覆盖，也能被两个渲染入口共用。
+   M01 实测产物：常驻标记路径为 `marker.js 7.15 kB + marker.css 10.98 kB + common chunk 5.10 kB = 23.23 kB`（形态/角标/进度环与拖拽桥都在其中），i18next 已完全移出常驻路径，只随面板打包（`panel.js 587.45 → 673.04 kB`、`panel.css 19.74 → 21.80 kB`）；`main 384.07 kB`、`preload 3.74 kB`。ICU 打包（78.13 kB，`es-*.js`）仍由 i18next-icu 动态 import 承担，只有面板与提醒弹窗按需加载。
+
+   M04 实测产物：`reminder.js 12.55 kB + reminder.css 31.41 kB`（React + 共享 UI 层 + 粒子特效），`main 513.88 kB`、`preload 10.97 kB`、`panel.js 88.34 kB + panel.css 32.13 kB`（面板此后按 chunk 拆分，`format-*.js 668.64 kB` 为共享 chunk）。
+2. **`src/shared` 只放纯函数与类型**，不 import `electron`、不 import Node 内置模块；这样吸附算法、RRULE、格式化函数可以直接被 Vitest 单测覆盖，也能被三个渲染入口共用。
 
 ---
 
@@ -308,7 +310,7 @@ M04 把下面几条写进了代码（`src/main/db/repositories/reminders.ts` + `
 
 三件让它可单测的事：
 
-- **服务层不 import electron**（§2 的结构性决定）。交付一个提醒意味着一条系统通知、以及无人应答时的一张内置卡片，但调度器只知道**实例**和它对应的任务；`SchedulerDeps.deliver` 是启动时注入的回调，`src/main/platform/notifications.ts` 才是那个会说 OS 语言的人。于是时序规则可以对着一份真库、一只手工拨动的时钟单测，全程不碰 Electron。
+- **服务层不 import electron**（§2 的结构性决定）。交付一个提醒意味着一条系统通知、以及无人应答时的一个内置弹出窗口，但调度器只知道**实例**和它对应的任务；`SchedulerDeps.deliver` 是启动时注入的回调，`src/main/platform/notifications.ts` 才是那个会说 OS 语言的人。于是时序规则可以对着一份真库、一只手工拨动的时钟单测，全程不碰 Electron。
 - **时钟可注入**（`now`），**定时器可注入**（`arm`）——测试自己拥有两端，所以断言的是算术与事件顺序，而不是机器跑了多久。
 - **数据库就是记忆**：已交付的实例移到 `fired` 并留在那里，重启不会重播；错过的被标成 `dismissed`。【从不重复】这条规则因此不必记在调度器里——它已经是一行数据。
 
@@ -319,15 +321,18 @@ M04 把下面几条写进了代码（`src/main/db/repositories/reminders.ts` + `
 `src/main/platform/notifications.ts`。一个到点的提醒被说两遍，第二遍是第一遍的沉默换来的：
 
 1. **系统原生通知**（Windows toast / macOS 通知中心）——在人所在的地方开口，且能在应用退到后台时存活；点击即应答，并把面板打开到那个任务。
-2. 若数分钟后仍无人应答，再浮出**应用内置置顶卡片**（`renderer/panel/src/reminder-card.tsx`），这是 OS 收不走的那一层。
+2. 若数分钟后仍无人应答，再浮出**应用自己的置顶弹窗**（`src/main/windows/reminder.ts` + 第三个渲染入口 `renderer/reminder/`），这是 OS 收不走的那一层。
 
-- **两者绝不同时说话**：一个提醒是一个实例一行数据，那行数据就是全部的协调——点击 toast 把实例置为 `dismissed`，卡片定时器开卡前重读该行，发现它已不是 `fired` 就什么都不做。反向亦同：应答卡片时顺带关掉 toast（Windows 上横幅不点会一直留着，留着就是对一件刚处理过的事做第二次、过时的播报）。
-- **卡片只上报"用户看过了"**：`reminder:dismiss` 是提醒域唯一的渲染层→主进程通道（§6.4）。卡片按载荷绘制而不是回头去读提醒——它是一条通知，不是数据的一个视图；主进程无法自己观测的、也只有"卡片被收起了"这一件事。
-- **平台没有通知就只剩卡片**：`Notification.isSupported()` 在某些 Windows / macOS 会话里为假，此时卡片仍按同一只定时器到达，而不是被跳过。
-- **卡片不抢焦点**：`expandPanelForReminder` 与点击展开走同一条摆放路径（锚点矩形，§9.4），但省掉 `focus()` / `moveTop()`。卡片是没人应答时的兜底，把光标从用户正在打字的地方夺走正是两段式想要避免的打扰；不抢焦点也意味着正常的失焦收起定时器不会启动——没拿走什么，就不必还回去。
+- **第二遍不是面板**：早先这一层是面板里内嵌的一张卡片，那样面板会为了播报而展开——而这条播报存在的理由恰恰是"用户正在做别的事"（M04 D2）。现在它是**一个独立的小窗口**：`transparent + frameless + alwaysOnTop + skipTaskbar`，每个实例一个窗口，多个同时到点就逐个竖直堆叠，窗口位置与堆叠由 `shared/utils/anchoring.ts` 的 `placeReminderPopup` 纯函数算出（复用 `placePanel` 的停靠边规则，末尾一律夹回工作区），标记拖动时所有弹窗跟着标记走（与面板同一条 `onMarkerMoved` 订阅）。
+- **弹窗不抢焦点**：`showInactive()`（而不是 `show()` / `focus()`），因为它是"一条没人应答的通知"的兜底，把光标从用户正在打字的地方夺走正是两段式想要避免的打扰。窗口尺寸与位置**先定好再显示**，缓入动画只动 `opacity` 与 `transform`（`reminder.css`，300ms；退出 180ms），因此没有一帧碰到窗口尺寸——与面板同一条 §7 / §9.1 的纪律。
+- **点击「完成」会有一次粒子爆发**：Canvas2D 绘制（`renderer/reminder/src/particles.ts`），约 1.2 秒，颜色取自 `tokens.css` 的 `--burst-*` 令牌（渲染层不写死颜色）。`prefers-reduced-motion` 下整段跳过，但**应答照发**——特效是装饰，不是流程里的一步。特效演完才发应答，所以写入不会和动画抢时间。
+- **两者绝不同时说话**：一个提醒是一个实例一行数据，那行数据就是全部的协调——点击 toast 把实例置为 `dismissed`，弹窗定时器开窗时重读那份内存条目（已被应答的条目连同定时器一起被删掉了），于是什么都不再开。反向亦同：应答弹窗时顺带关掉 toast（Windows 上横幅不点会一直留着，留着就是对一件刚处理过的事做第二次、过时的播报）。**关窗写在应答路径里而不是渲染层**：渲染层只上报"我答了"，由 `answerReminder` 一处决定关哪些 OS 对象。
+- **提醒域的两条渲染层→主进程通道**（§6.4）：`reminder:dismiss`（只知道读过了，任务不动）与 `reminder:done`（顺手把任务勾成完成）。后者的两次写入——任务状态与实例状态——由 handler 在**同一条命令**里做完并只发一次 `task-events`，和面板自己的勾选是同一条服务层路径；把两件事拆成两个通道会让渲染层有机会只做成一件。
+- **弹窗按载荷绘制**：`ReminderDuePayload` 经 `loadRenderer` 的附加查询串（`?reminder=<json>`，为主进程与渲染层共用的解析函数 `parseReminderPopupPayload` 校验）随窗口一起来，于是首帧就是正确的那条提醒，而不必先画一张空卡片等 IPC 回话。它是一条通知，不是数据的一个视图。
+- **平台没有通知就只剩弹窗**：`Notification.isSupported()` 在某些 Windows / macOS 会话里为假，此时弹窗仍按同一只定时器到达，而不是被跳过。
 - **任务没了就不说**：交付时任务行已不在（在别处被删）则实例直接置为 `dismissed`——一个没有名字可叫的播报比沉默更糟。
 
-M04 P0 落地的档位是 5 / 10 / 30 分钟、1 小时、1 天（`REMIND_LEAD_PRESETS`），详情页把它们画成 chip 并保留原来的数字输入框（`data-field="detail-remind"` 不变，冒烟依赖它）；`leadBucketOf` 决定这个档位该说"分钟 / 小时 / 天"。**Snooze 未实现**：`snooze_until` 列已就位，但卡片上不提供这个按钮——一个说了却不算数的按钮比没有更糟（P2）。
+M04 P0 落地的档位是 5 / 10 / 30 分钟、1 小时、1 天（`REMIND_LEAD_PRESETS`），详情页把它们画成 chip 并保留原来的数字输入框（`data-field="detail-remind"` 不变，冒烟依赖它）；`leadBucketOf` 决定这个档位该说"分钟 / 小时 / 天"。**Snooze 未实现**：`snooze_until` 列已就位，但弹窗上不提供这个按钮——一个说了却不算数的按钮比没有更糟（P2）。
 
 ### 5.4 迁移与备份
 
@@ -408,7 +413,7 @@ export const taskCreateInput = z.object({
 - 与早先草案的两处差异：`listId` / `parentId` 用**有界标识符**而非 `z.string().uuid()`（id 由本项目的 UUID v7 生成，不接受任意 uuid 版本）；`tags` 传的是**标签名**而非标签 id（`tags.name` 已是 UNIQUE，主进程按名去重创建，M02 §4）。
 - 任务通道：`task:query` / `task:create` / `task:update` / `task:delete` / `task:restore` / `task:reorder`，事件 `event:task-changed`。一次写入恰好一次通知，通知只发面板窗口（`services/task-events.ts`）。
 - 附件通道：`attachment:list` / `attachment:add` / `attachment:remove` / `attachment:open` / `attachment:thumbnail`（M03 S3）。
-- 提醒通道（M04）：只有 `reminder:dismiss` 一个渲染层→主进程通道，schema 是 `reminderDismissInput`。其余全是主进程→面板的事件：`event:reminder-due`（卡片到期，载荷 `ReminderDuePayload`：instance id / taskId / title / dueAt）与 `event:task-focus`（toast 被点击要打开的那个任务，载荷 `TaskFocusPayload`）。渲染层既不查询也不排期提醒——主进程说什么时候到，渲染层只负责画出来，以及回答"用户看过了"。
+- 提醒通道（M04）：渲染层→主进程只有两条，`reminder:dismiss`（`reminderDismissInput`：用户看过了）与 `reminder:done`（`reminderDoneInput`：id + taskId，把任务勾成完成并在同一条命令里应答实例）。主进程→渲染层的事件只有一个：`event:task-focus`（toast 被点击要打开的那个任务，载荷 `TaskFocusPayload`）。渲染层既不查询也不排期提醒——主进程说什么时候到，弹窗按它自己窗口的载荷（`ReminderDuePayload` 经 `loadRenderer` 的附加查询串传入）画出来，以及回答"我答了哪一条"。
 - 每个 handler 的第一行是 `schema.safeParse(payload)`，**主进程不信渲染层的任何输入**；注册器与各域 handler 共用 `ipc/validate.ts` 的 `invalid()`，保证拒绝形状与日志一致。
 - preload 通过 `contextBridge.exposeInMainWorld('api', ...)` 只暴露白名单方法（`window.api.task.create(...)`），**不暴露 `ipcRenderer` 本体**，渲染层无法发送任意通道。
 - 渲染层不接触 `fs` / `path` / `db`，所有文件操作在主进程完成。
@@ -474,17 +479,17 @@ theme: { extend: { colors: {
 
 ### 9.1 窗口参数
 
-| 参数 | 标记窗口 | 面板窗口 |
-|---|---|---|
-| 尺寸 | 美术尺寸（`MARKER_ARTWORK`）：圆点 28×28；胶囊 56×28；图标 40×40；随 `markerScale` 缩放 0.8–1.5。**窗口尺寸 = max(美术尺寸, 平台下限)**，win32 下限 32×39（§9.1.1），darwin 无下限 | 宽 320–640，高 420–900，默认 380×560 |
-| `frame` / `transparent` | `false` / `true` | `false` / `true` |
-| `backgroundColor` | `#00000000` | 主题底色（避免首帧闪白） |
-| `skipTaskbar` | `true` | `true` |
-| `focusable` | `false`（不抢焦点） | `true` |
-| `alwaysOnTop` | `true`（macOS 用 `setAlwaysOnTop(true, 'screen-saver')`；Windows 层面参数无效，用顶层置顶） | `true` 写死（无开关，见 §9.9） |
-| `hasShadow` / `roundedCorners` | `false` / 系统默认 | 由 CSS 画圆角与阴影 |
-| macOS 额外项 | `acceptFirstMouse: true`、`type: 'panel'`、`visibleOnAllWorkspaces(true, { visibleOnFullScreen: true })` | 同左（`type` 视情况） |
-| 其他 | `resizable: false`、`maximizable: false`、`fullscreenable: false` | `resizable: false`，`movable: false`（位置由程序计算） |
+| 参数 | 标记窗口 | 面板窗口 | 提醒弹窗（M04） |
+|---|---|---|---|
+| 尺寸 | 美术尺寸（`MARKER_ARTWORK`）：圆点 28×28；胶囊 56×28；图标 40×40；随 `markerScale` 缩放 0.8–1.5。**窗口尺寸 = max(美术尺寸, 平台下限)**，win32 下限 32×39（§9.1.1），darwin 无下限 | 宽 320–640，高 420–900，默认 380×560 | 固定 340×124（`REMINDER_POPUP_SIZE`，不可缩放） |
+| `frame` / `transparent` | `false` / `true` | `false` / `true` | `false` / `true` |
+| `backgroundColor` | `#00000000` | 主题底色（避免首帧闪白） | `#00000000` |
+| `skipTaskbar` | `true` | `true` | `true` |
+| `focusable` | `false`（不抢焦点） | `true` | `true`，但只用 `showInactive()` 显示（不抢光标，§5.3.2） |
+| `alwaysOnTop` | `true`（macOS 用 `setAlwaysOnTop(true, 'screen-saver')`；Windows 层面参数无效，用顶层置顶） | `true` 写死（无开关，见 §9.9） | `true` 写死（没人应答的通知不能被盖住） |
+| `hasShadow` / `roundedCorners` | `false` / 系统默认 | 由 CSS 画圆角与阴影 | `false` / `false`（圆角与阴影由 CSS 画） |
+| macOS 额外项 | `acceptFirstMouse: true`、`type: 'panel'`、`visibleOnAllWorkspaces(true, { visibleOnFullScreen: true })` | 同左（`type` 视情况） | 同左（`type: 'panel'`） |
+| 其他 | `resizable: false`、`maximizable: false`、`fullscreenable: false` | `resizable: false`，`movable: false`（位置由程序计算） | `resizable: false`、`maximizable: false`、`minimizable: false`、`spellcheck: false`；每实例一个窗口，位置由 `placeReminderPopup` 算出 |
 
 **关键取舍**：标记窗口**不能**用 `setIgnoreMouseEvents`——那是点击穿透，会让标记彻底点不到。
 

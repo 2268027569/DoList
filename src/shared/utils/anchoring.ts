@@ -234,6 +234,44 @@ export function placePanel(
   return place(x, centeredY, panelSize, workArea);
 }
 
+/**
+ * The reminder popup's window size (docs/FEATURES.md M04).
+ *
+ * Fixed rather than resizable, and narrower than the panel: the popup is a notification
+ * the user reads and answers, not a surface they work in, so it is sized once for the
+ * four things it draws (a label, the task's name, its deadline, two buttons).
+ */
+export const REMINDER_POPUP_SIZE: { width: number; height: number } = { width: 340, height: 124 };
+
+/**
+ * Places the reminder popup beside the marker, and stacks it when several are due at
+ * once (M04).
+ *
+ * The first popup sits exactly where the panel would open — same docked-edge rule, same
+ * gap — because the popup is a stand-in for it and should look like it belongs to the
+ * same marker. `index` 0 is that first popup; each one after it steps further along the
+ * axis the first one already opens in: a marker docked to the bottom edge opens upwards,
+ * so the stack grows upwards; everywhere else it grows downwards. Every rectangle is
+ * clamped back inside the work area, so a stack that runs out of room piles up against
+ * the edge rather than off screen.
+ */
+export function placeReminderPopup(
+  markerBounds: Rect,
+  workArea: Rect,
+  index: number,
+  size: { width: number; height: number } = REMINDER_POPUP_SIZE,
+): Rect {
+  const base = placePanel(markerBounds, size, workArea);
+  if (index <= 0) return base;
+
+  const step = size.height + PANEL_GAP_PX;
+  const upwards = dockedEdge(markerBounds, workArea) === 'bottom';
+  const y = upwards ? base.y - index * step : base.y + index * step;
+  // Threshold 0: this is a clamp, not a snap — the popup is not a marker and must not
+  // be pulled onto an edge it merely came close to.
+  return { ...base, y: snapToWorkArea({ ...base, y }, workArea, 0).y };
+}
+
 /** Clamps a placement into the work area, keeping the given size. */
 function place(
   x: number,

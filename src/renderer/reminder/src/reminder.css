@@ -1,0 +1,61 @@
+/*
+ * The reminder popup's stylesheet. Tailwind plus the shared base layer, exactly like
+ * the panel: the popup is a transient window, so it may pay for the utility sheet in
+ * a way the permanently resident marker may not (§2).
+ */
+@import 'tailwindcss';
+@import '../../shared-ui/base.css';
+
+/*
+ * The OS draws its own chrome — scrollbar tracks, the popup behind a number field — in
+ * whichever colour scheme this names, so a dark card is not interrupted by white native
+ * controls (§7). Same rule the panel applies; the popup has no native control today but
+ * a future one must not have to remember this.
+ */
+:root[data-mode='light'] {
+  color-scheme: light;
+}
+
+:root[data-mode='dark'] {
+  color-scheme: dark;
+}
+
+/*
+ * The card itself, and its ease-in (M04).
+ *
+ * Only opacity and transform animate, so the whole thing stays on the compositor —
+ * the window is already at its final size and place when the card appears, so no
+ * frame of this touches window bounds (§7, §9.1). It rises a few pixels into place
+ * as it fades in, which is what makes it read as arriving rather than appearing.
+ *
+ * The surface is mixed with transparency the way the panel's is, so a themed popup
+ * keeps its own background colour rather than borrowing the desktop behind it.
+ */
+.reminder-popup {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.97);
+  transition-property: opacity, transform;
+  transition-timing-function: var(--ease-emphasized), var(--ease-spring);
+  background-color: color-mix(
+    in srgb,
+    var(--bg-surface) calc(var(--panel-opacity, 1) * 100%),
+    transparent
+  );
+}
+
+.reminder-popup[data-phase='open'] {
+  opacity: 1;
+  transform: scale(1);
+}
+
+/* The way out: down and away, quickly — the answer is already on its way. */
+.reminder-popup[data-phase='leaving'] {
+  opacity: 0;
+  transform: translateY(6px) scale(0.97);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reminder-popup {
+    transition-duration: 1ms !important;
+  }
+}

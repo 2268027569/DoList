@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import type { Rect } from '../types/app';
 import {
+  PANEL_GAP_PX,
+  REMINDER_POPUP_SIZE,
   SNAP_THRESHOLD_PX,
   dockedEdge,
   fromAnchor,
   isVisibleIn,
   placePanel,
+  placeReminderPopup,
   snapToWorkArea,
   toAnchor,
 } from './anchoring';
@@ -186,5 +189,56 @@ describe('dockedEdge', () => {
     expect(dockedEdge({ x: 40, y: 500, ...MARKER }, WORK_AREA)).toBe('free');
     expect(dockedEdge({ x: 900, y: 40, ...MARKER }, WORK_AREA)).toBe('free');
     expect(dockedEdge({ x: 900, y: 40, ...MARKER }, WORK_AREA, 64)).toBe('top');
+  });
+});
+
+describe('placeReminderPopup', () => {
+  const STEP = REMINDER_POPUP_SIZE.height + PANEL_GAP_PX;
+
+  it('puts the first popup exactly where the panel would open', () => {
+    const marker: Rect = { x: 900, y: 0, ...MARKER };
+    expect(placeReminderPopup(marker, WORK_AREA, 0)).toEqual(
+      placePanel(marker, REMINDER_POPUP_SIZE, WORK_AREA),
+    );
+  });
+
+  it('stacks downwards from a marker docked to the top edge', () => {
+    const marker: Rect = { x: 900, y: 0, ...MARKER };
+    const first = placeReminderPopup(marker, WORK_AREA, 0);
+    const second = placeReminderPopup(marker, WORK_AREA, 1);
+    expect(second.y).toBe(first.y + STEP);
+    expect(second.x).toBe(first.x);
+  });
+
+  it('stacks upwards from a marker docked to the bottom edge', () => {
+    const marker: Rect = { x: 900, y: WORK_AREA.height - MARKER.height, ...MARKER };
+    const first = placeReminderPopup(marker, WORK_AREA, 0);
+    const second = placeReminderPopup(marker, WORK_AREA, 1);
+    expect(second.y).toBe(first.y - STEP);
+    expect(second.y + second.height).toBeLessThanOrEqual(first.y);
+  });
+
+  it('stacks downwards along a side edge, keeping the same column', () => {
+    const marker: Rect = { x: 0, y: 500, ...MARKER };
+    const first = placeReminderPopup(marker, WORK_AREA, 0);
+    const second = placeReminderPopup(marker, WORK_AREA, 1);
+    expect(second.y).toBe(first.y + STEP);
+    expect(second.x).toBe(first.x);
+  });
+
+  it('piles a stack that runs out of room against the work-area edge', () => {
+    const marker: Rect = { x: 900, y: WORK_AREA.height - MARKER.height, ...MARKER };
+    const far = placeReminderPopup(marker, WORK_AREA, 12);
+    expect(far.y).toBe(WORK_AREA.y);
+    expect(far.y + far.height).toBeLessThanOrEqual(WORK_AREA.height);
+  });
+
+  it('clamps into a display with a non-zero origin', () => {
+    const secondary: Rect = { x: 1920, y: 100, width: 1920, height: 1040 };
+    const marker: Rect = { x: 2800, y: secondary.y + secondary.height - MARKER.height, ...MARKER };
+    const far = placeReminderPopup(marker, secondary, 12);
+    expect(far.y).toBe(secondary.y);
+    expect(far.x).toBeGreaterThanOrEqual(secondary.x);
+    expect(far.x + far.width).toBeLessThanOrEqual(secondary.x + secondary.width);
   });
 });

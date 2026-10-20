@@ -23,6 +23,8 @@
   --palette-amber-500: #f5a524;
   --palette-red-500: #d93025;
   --palette-red-400: #ff6b61;
+  --palette-violet-500: #8b5cf6;
+  --palette-pink-500: #ec4899;
 
   --palette-white: #ffffff;
   --palette-black: #000000;
@@ -188,6 +190,25 @@
    */
   --ease-spring: cubic-bezier(0.34, 1.42, 0.5, 1);
   --duration-spring: 200ms;
+}
+
+/* --------------------------------------------- layer 3 · completion burst */
+
+/*
+ * The palette of the popup's completion burst (M04). A particle effect is pure
+ * decoration, so this is where a set of colours of its own is honest: the burst is
+ * meant to read as a celebration rather than as a status, which is why it draws on
+ * the accent, the three priority hues and two extra hues of its own. Declared as
+ * tokens rather than named in the renderer, so the effect stays theme-aware and the
+ * token check stays satisfied (§7).
+ */
+:root {
+  --burst-1: var(--accent);
+  --burst-2: var(--priority-low);
+  --burst-3: var(--priority-medium);
+  --burst-4: var(--status-overdue);
+  --burst-5: var(--palette-violet-500);
+  --burst-6: var(--palette-pink-500);
 }
 
 /* --------------------------------------------- layer 3 · marker variants */

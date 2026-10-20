@@ -16,7 +16,7 @@ import type {
   TaskQueryInput,
   TaskUndoResult,
 } from '@shared/contracts/task';
-import type { ReminderDuePayload, TaskFocusPayload } from '@shared/contracts/reminder';
+import type { TaskFocusPayload } from '@shared/contracts/reminder';
 import type { AppSettings } from '@shared/contracts/settings';
 import type { BootParams, MarkerAnchor } from '@shared/types/app';
 import type { Attachment, ReorderScope, TaskListItem, TaskWithTags } from '@shared/types/task';
@@ -99,11 +99,22 @@ const api = {
   },
   reminder: {
     /**
-     * The user answered a reminder card (M04). The instance's state is the main
-     * process's to keep, and whether the card was put away is the one fact about it the
-     * renderer knows and the main process cannot see for itself.
+     * The user answered the reminder popup without ticking the task off (M04). The
+     * instance's state is the main process's to keep, and whether the popup was read is
+     * the one fact about it the renderer knows and the main process cannot see.
      */
     dismiss: (id: string) => invoke<{ dismissed: boolean }>(IPC.reminder.dismiss, { id }),
+    /**
+     * The other answer: the user ticked the task off from the popup (M04). One channel
+     * for the one action — the handler makes the task write and the instance's answer
+     * together, because a renderer that issued them separately could leave one of them
+     * done and the other not.
+     */
+    done: (id: string, taskId: string) =>
+      invoke<{ dismissed: boolean; task: TaskWithTags | null }>(IPC.reminder.done, {
+        id,
+        taskId,
+      }),
   },
   i18n: {
     setLocale: (locale: string) => invoke<string>(IPC.i18n.setLocale, { locale }),
@@ -137,13 +148,6 @@ const api = {
     /** The app menu asked for a view; the panel owns that state (M02 S8). */
     panelView: (listener: (payload: PanelViewPayload) => void) =>
       subscribe(IPC.event.panelView, listener),
-    /**
-     * A reminder's card is due: the OS notification for the same instance went
-     * unanswered, and this is the surface that takes over (M04). The payload carries
-     * what the card draws, so the panel does not have to read the reminder back.
-     */
-    reminderDue: (listener: (payload: ReminderDuePayload) => void) =>
-      subscribe(IPC.event.reminderDue, listener),
     /** Open this task — sent when a reminder toast was clicked (M04). */
     taskFocus: (listener: (payload: TaskFocusPayload) => void) =>
       subscribe(IPC.event.taskFocus, listener),
