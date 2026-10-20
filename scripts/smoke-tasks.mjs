@@ -1961,6 +1961,78 @@ async function main() {
       fail('the panel appearance popover did not open');
     }
 
+    // The same popover carries the appearance controls: which way the surface reads
+    // (light / dark / follow the system) and which token set draws it. The write goes
+    // to the main process and comes back as a broadcast, so what is asserted is the
+    // document root — the panel's own answer — rather than the row that was written.
+    // The original preference is read first and put back at the end: this phase runs
+    // against the smoke database, but a mode left behind would decide what the *next*
+    // phase sees, which is the sort of leak this suite avoids elsewhere.
+    const appearanceBefore = readAppSettings();
+    const modeBefore = appearanceBefore?.themeMode ?? 'system';
+    const surfaceBefore = await evaluate(
+      cdp,
+      `getComputedStyle(document.querySelector('.panel-card')).backgroundColor`,
+    );
+
+    await gotoField(cdp, 'panel-mode-dark');
+    await pressKey(cdp, 'Enter');
+    const toDark = await waitForEval(
+      cdp,
+      `document.documentElement.dataset.mode === 'dark' && document.documentElement.dataset.theme`,
+    );
+    if (toDark !== null) {
+      pass('choosing the dark mode redrew the panel on the dark token set', { theme: toDark });
+    } else {
+      fail('the panel did not switch to the dark token set after choosing the dark mode');
+    }
+    // A light/dark flip that only changed `data-mode` would leave the palette alone, so
+    // the surface colour itself is read as well.
+    const darkSurface = await evaluate(
+      cdp,
+      `getComputedStyle(document.querySelector('.panel-card')).backgroundColor`,
+    );
+    if (darkSurface !== null && surfaceBefore !== null && darkSurface !== surfaceBefore) {
+      pass('the dark mode repainted the surface itself, not just the attribute', {
+        before: surfaceBefore,
+        after: darkSurface,
+      });
+    } else {
+      fail(`the panel surface is still ${JSON.stringify(surfaceBefore)} after the dark mode`);
+    }
+
+    await gotoField(cdp, 'panel-theme-graphite');
+    await pressKey(cdp, 'Enter');
+    const toGraphite = await waitForEval(
+      cdp,
+      `document.documentElement.dataset.theme === 'graphite' ? document.documentElement.dataset.theme : null`,
+    );
+    if (toGraphite === 'graphite') {
+      pass('choosing a theme swaps the token set under the same mode');
+    } else {
+      fail('the panel did not take the graphite token set after choosing that theme');
+    }
+
+    // Back to what the run started with, so nothing downstream is measured in a palette
+    // this phase chose.
+    const themeBefore = appearanceBefore?.themeId ?? 'minimal';
+    await gotoField(cdp, `panel-mode-${modeBefore}`);
+    await pressKey(cdp, 'Enter');
+    await gotoField(cdp, `panel-theme-${themeBefore}`);
+    await pressKey(cdp, 'Enter');
+    const restored = await waitForEval(
+      cdp,
+      `document.documentElement.dataset.theme === ${JSON.stringify(themeBefore)} ? 'restored' : null`,
+    );
+    if (restored === 'restored') {
+      pass('the appearance controls put the panel back where it started', {
+        mode: modeBefore,
+        theme: themeBefore,
+      });
+    } else {
+      fail('the panel did not return to its stored appearance');
+    }
+
     const cardBefore = await evaluate(
       cdp,
       `getComputedStyle(document.querySelector('.panel-card')).backgroundColor`,

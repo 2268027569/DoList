@@ -5,7 +5,7 @@ import { useTranslation, initReactI18next } from 'react-i18next';
 
 import { DETAIL_TASK_QUERY_KEY, parseDetailTaskId } from '@shared/contracts/detail';
 
-import { readBoot } from '../../shared-ui/boot';
+import { readBoot, applyBootParams } from '../../shared-ui/boot';
 import { i18n, initRendererI18n } from '../../shared-ui/i18n';
 import { TaskDetail } from './task-detail';
 import { useDetailStore } from './store';
@@ -84,6 +84,13 @@ function DetailWindow({ taskId }: { taskId: string | null }): ReactElement {
    * the first task, which is what makes the first frame the right one.
    */
   const [shownTaskId, setShownTaskId] = useState(taskId);
+
+  useEffect(() => {
+    // A theme change redraws this window like every other entry. It matters more here
+    // than it used to: a warmed window is loaded *before* the click, so without this it
+    // would keep the token set it was warmed with.
+    return window.api.on.themeChanged((params) => applyBootParams(params));
+  }, []);
 
   useEffect(() => {
     return window.api.on.detailOpen((payload) => setShownTaskId(payload.taskId));

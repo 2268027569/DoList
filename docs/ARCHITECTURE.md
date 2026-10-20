@@ -452,6 +452,7 @@ theme: { extend: { colors: {
 - 防闪白：主进程在建窗前先读设置算出 `mode`+`theme`，写入 `BrowserWindow` 的 `backgroundColor`，并在 HTML 顶部内联脚本先行设置 `data-mode`，避免首帧白屏闪烁。
 - 无障碍：主题需通过对比度校验（正文 ≥ 4.5:1，次要文字 ≥ 3:1）；令牌文件里附一组对比度断言，由单测执行。
 - 标记窗口消费同一套令牌（独立作用域），保证"标记颜色 = 面板颜色"的视觉一致性。
+- **用户怎么选**：面板右上角 **◐**（`data-field="panel-settings"`）的弹层里放外观模式（`panel-mode-light|dark|system`）、主题（`panel-theme-minimal|graphite`）与不透明度滑杆。控件读的是**偏好**（设置行里的 `themeMode`，含 `system`），不是已经解析过的 `boot.mode`——后者在跟随系统时永远是 light/dark，"我当初选了哪一个"只在设置行里。写入走 `settings:set`，`themeMode` / `themeId` 变化时主进程 `broadcastTheme()` 把新的 `resolveBoot` 推给所有窗口（§9.7 的 `event:theme-changed`），面板与详情窗各自 `applyBootParams` 换根属性。预热中的详情窗也订阅这条事件——它比点击更早加载页面，不重画就会带着预热时的令牌出现在另一套配色里。
 
 ---
 
