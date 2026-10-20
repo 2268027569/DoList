@@ -170,6 +170,13 @@ export function TaskDetail({ task }: { task: TaskWithTags }): ReactElement {
   const [repeatOpen, setRepeatOpen] = useState(
     task.repeatRule !== null && presetFor(task.repeatRule) === null,
   );
+  /**
+   * Whether the reminder's lead choices are on screen. It follows the stored lead once
+   * one exists; the only thing it adds is the moment between "turned on" and "picked a
+   * time", where the choices are shown but nothing has been written yet — a default lead
+   * written behind the user's back would arm a moment they never asked for.
+   */
+  const [remindOpen, setRemindOpen] = useState(task.remindLeadMin !== null);
   const subtaskField = useRef<HTMLInputElement>(null);
   const titleField = useRef<HTMLInputElement>(null);
   /**
@@ -265,6 +272,7 @@ export function TaskDetail({ task }: { task: TaskWithTags }): ReactElement {
    * disagree about the one value they both write.
    */
   const chooseRemind = (minutes: number | null): void => {
+    setRemindOpen(minutes !== null);
     setRemind(minutes === null ? '' : String(minutes));
     void save({ remindLeadMin: minutes });
   };
@@ -483,50 +491,71 @@ export function TaskDetail({ task }: { task: TaskWithTags }): ReactElement {
 
         <Field label={t('detail.remind')}>
           {/*
-           * The five preset leads sit above the custom field rather than replacing it
-           * (M04): the chip is what the user reaches for nine times out of ten, and the
-           * number stays for the tenth. A chip that is already the active one clears it,
-           * which is the same gesture the repeat presets use.
+           * A reminder the task does not have is a single thing to turn on, not six
+           * choices with none of them taken (M04): showing the presets unpressed made the
+           * section read as always-on but unset. Once it *is* set, the choices appear —
+           * and turning it off restores the one button.
            */}
-          <div className="flex flex-wrap gap-1.5">
-            {REMIND_LEAD_PRESETS.map((minutes) => (
-              <Choice
-                key={minutes}
-                field={`detail-remind-${minutes}`}
-                active={task.remindLeadMin === minutes}
-                onClick={() => chooseRemind(task.remindLeadMin === minutes ? null : minutes)}
-              >
-                {t(REMIND_BUCKET_KEY[leadBucketOf(minutes)], { n: displayLead(minutes) })}
+          {remindOpen ? (
+            <>
+              {/*
+               * The five preset leads sit above the custom field rather than replacing
+               * it: the chip is what the user reaches for nine times out of ten, and the
+               * number stays for the tenth. A chip that is already the active one clears
+               * it, which is the same gesture the repeat presets use.
+               */}
+              <div className="flex flex-wrap gap-1.5">
+                {REMIND_LEAD_PRESETS.map((minutes) => (
+                  <Choice
+                    key={minutes}
+                    field={`detail-remind-${minutes}`}
+                    active={task.remindLeadMin === minutes}
+                    onClick={() => chooseRemind(task.remindLeadMin === minutes ? null : minutes)}
+                  >
+                    {t(REMIND_BUCKET_KEY[leadBucketOf(minutes)], { n: displayLead(minutes) })}
+                  </Choice>
+                ))}
+              </div>
+              {/*
+               * The custom lead stays a plain minutes field, with the unit spelled out:
+               * the presets cover the round values, and a number without a unit next to
+               * an input that once said "（分钟）" is not something a reader should guess.
+               */}
+              <div className="mt-2 flex items-center gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  inputMode="numeric"
+                  value={remind}
+                  placeholder={t('detail.none')}
+                  aria-label={t('detail.remindUnit')}
+                  data-field="detail-remind"
+                  onChange={(event) => setRemind(event.target.value)}
+                  onBlur={commitRemind}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'Enter') return;
+                    event.preventDefault();
+                    commitRemind();
+                  }}
+                  className={`${INPUT} w-24 tabular-nums`}
+                />
+                <span className="shrink-0 text-[11px] text-[var(--text-muted)]">
+                  {t('detail.remindUnit')}
+                </span>
+                <span className="ml-auto">
+                  <Choice field="detail-remind-off" dashed onClick={() => chooseRemind(null)}>
+                    {t('detail.remindOff')}
+                  </Choice>
+                </span>
+              </div>
+            </>
+          ) : (
+            <div>
+              <Choice field="detail-remind-enable" onClick={() => setRemindOpen(true)}>
+                {t('detail.remindEnable')}
               </Choice>
-            ))}
-          </div>
-          {/*
-           * The custom lead stays a plain minutes field, with the unit spelled out: the
-           * presets above cover the round values, and a number without a unit next to an
-           * input that once said "（分钟）" is not something a reader should have to guess.
-           */}
-          <div className="mt-2 flex items-center gap-2">
-            <input
-              type="number"
-              min={0}
-              inputMode="numeric"
-              value={remind}
-              placeholder={t('detail.none')}
-              aria-label={t('detail.remindUnit')}
-              data-field="detail-remind"
-              onChange={(event) => setRemind(event.target.value)}
-              onBlur={commitRemind}
-              onKeyDown={(event) => {
-                if (event.key !== 'Enter') return;
-                event.preventDefault();
-                commitRemind();
-              }}
-              className={`${INPUT} w-24 tabular-nums`}
-            />
-            <span className="shrink-0 text-[11px] text-[var(--text-muted)]">
-              {t('detail.remindUnit')}
-            </span>
-          </div>
+            </div>
+          )}
         </Field>
       </Group>
 
@@ -996,7 +1025,7 @@ function Choice({
           ? 'border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--text-primary)]'
           : dashed
             ? 'border-dashed border-[var(--border-strong)] bg-transparent text-[var(--text-muted)] hover:text-[var(--text-primary)]'
-            : 'border-transparent bg-[var(--bg-surface-muted)] text-[var(--text-secondary)] hover:text-[var(--text-primary)]'
+            : 'border-transparent bg-transparent text-[var(--text-secondary)] hover:bg-[var(--bg-surface-muted)] hover:text-[var(--text-primary)]'
       }`}
     >
       {dot !== undefined && (

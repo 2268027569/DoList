@@ -196,6 +196,33 @@ describe('placeTaskDetail', () => {
     expect(shareArea(rect, panel)).toBe(false);
   });
 
+  it('sits beside a top-docked panel, sharing its top edge', () => {
+    // A panel dropped from the top edge already hangs downwards; the detail continues
+    // that pair sideways instead of stacking below it, which would land on the far
+    // side of the screen and read as two unrelated windows.
+    const panel: Rect = { x: 900, y: 0, ...PANEL };
+    const rect = placeTaskDetail(panel, PANEL, WORK_AREA);
+    expect(rect.y).toBe(panel.y);
+    expect(rect.x).toBe(panel.x + panel.width + PANEL_GAP_PX);
+    expect(shareArea(rect, panel)).toBe(false);
+  });
+
+  it('sits beside a bottom-docked panel, sharing its bottom edge', () => {
+    const panel: Rect = { x: 900, y: WORK_AREA.height - PANEL.height, ...PANEL };
+    const rect = placeTaskDetail(panel, PANEL, WORK_AREA);
+    expect(rect.y + rect.height).toBe(panel.y + panel.height);
+    expect(rect.x).toBe(panel.x + panel.width + PANEL_GAP_PX);
+    expect(shareArea(rect, panel)).toBe(false);
+  });
+
+  it('goes to the roomier side of a vertical panel', () => {
+    // The panel is pushed so far right that only its left side has room.
+    const panel: Rect = { x: 1200, y: 0, width: 700, height: 560 };
+    const rect = placeTaskDetail(panel, PANEL, WORK_AREA);
+    expect(rect.x + rect.width).toBe(panel.x - PANEL_GAP_PX);
+    expect(rect.y).toBe(panel.y);
+  });
+
   it('never covers the panel, whichever edge the panel is docked to', () => {
     const panelAt: Record<string, Rect> = {
       left: { x: 0, y: 200, ...PANEL },

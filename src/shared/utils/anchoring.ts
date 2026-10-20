@@ -237,17 +237,23 @@ export function placePanel(
 /**
  * Places the task detail window beside the panel (docs/FEATURES.md M02 D6).
  *
- * The detail is a window of its own now, and it opens *next to* the panel rather than
- * over it: the list is left visible and operable while a task is edited, so a click on
+ * The detail is a window of its own, and it opens *next to* the panel rather than over
+ * it: the list is left visible and operable while a task is edited, so a click on
  * another row is one gesture away instead of a trip back through a back button.
  *
- * It is placed by feeding the panel's own rectangle to {@link placePanel}, which opens
- * away from whichever edge that rectangle is docked to (or, for a free one, on the
- * side its centre leaves room on). Where that result would still land on the panel —
- * a small display, or a panel wide enough that the clamp pulls the window back — it is
- * flipped to the panel's other side, and if neither side fits the preferred rectangle
- * is returned: a slightly overlapping window the user can drag is better than one off
- * screen or one that silently refuses to open.
+ * Where "next to" is depends on how the *panel* is docked, and the two axes are not
+ * interchangeable. A panel docked to the top edge already hangs downwards from the
+ * marker, and one docked to the bottom already rises upwards — so the detail continues
+ * that pair **sideways**, sharing the panel's top (or bottom) edge. Stacking it further
+ * along the vertical axis, which is what the marker's own rule would do, lands it on the
+ * far side of the screen once the panel is tall: the pair then reads as two unrelated
+ * windows placed diagonally, which is exactly what a top or bottom dock looked like.
+ * Panels docked left or right open sideways already, so the detail continues that row.
+ *
+ * Whichever side is chosen, the other axis is clamped into the work area, and a spot
+ * that would still land on the panel flips to the opposite side. If neither side has
+ * room, the preferred rectangle is returned: a slightly overlapping window the user can
+ * drag is better than one off screen or one that silently refuses to open.
  */
 export function placeTaskDetail(
   panelBounds: Rect,
@@ -255,6 +261,19 @@ export function placeTaskDetail(
   workArea: Rect,
   gap: number = PANEL_GAP_PX,
 ): Rect {
+  const edge = dockedEdge(panelBounds, workArea);
+
+  if (edge === 'top' || edge === 'bottom') {
+    // Sharing the edge the panel was opened from keeps the pair reading as one
+    // assembly: both windows start (or end) at the same line.
+    const y =
+      edge === 'top'
+        ? panelBounds.y
+        : panelBounds.y + panelBounds.height - detailSize.height;
+    const beside = placeBeside(panelBounds, detailSize, workArea, gap, y);
+    if (beside !== null) return beside;
+  }
+
   const preferred = placePanel(panelBounds, detailSize, workArea, gap);
   if (!overlaps(preferred, panelBounds)) return preferred;
 
@@ -281,6 +300,35 @@ export function placeTaskDetail(
 
   const candidate = place(flipped.x, flipped.y, detailSize, workArea);
   return overlaps(candidate, panelBounds) ? preferred : candidate;
+}
+
+/**
+ * The detail at `y`, on whichever horizontal side of the panel has room, or `null`
+ * when neither does.
+ *
+ * The roomier side wins when both fit, so the window goes where the user's own panel
+ * left space rather than always to the same side — a marker parked near the right edge
+ * has its panel pushed left, and the room is on its left too.
+ */
+function placeBeside(
+  panelBounds: Rect,
+  detailSize: { width: number; height: number },
+  workArea: Rect,
+  gap: number,
+  y: number,
+): Rect | null {
+  const rightX = panelBounds.x + panelBounds.width + gap;
+  const leftX = panelBounds.x - detailSize.width - gap;
+  const roomRight = workArea.x + workArea.width - rightX;
+  const roomLeft = leftX - workArea.x;
+
+  const fitsRight = roomRight >= detailSize.width;
+  const fitsLeft = roomLeft >= detailSize.width;
+  if (!fitsRight && !fitsLeft) return null;
+
+  const x = fitsRight && (!fitsLeft || roomRight >= roomLeft) ? rightX : leftX;
+  const rect = place(x, y, detailSize, workArea);
+  return overlaps(rect, panelBounds) ? null : rect;
 }
 
 /** True when two rectangles share any area at all. Touching edges count as apart. */

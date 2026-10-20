@@ -51,6 +51,8 @@
   "detail.clear": "Clear",
   "detail.remind": "Remind",
   "detail.remindUnit": "minutes",
+  "detail.remindEnable": "Add reminder",
+  "detail.remindOff": "Remove reminder",
   "detail.remindMinutes": "{n} min before",
   "detail.remindHours": "{n} hr before",
   "detail.remindDays": "{n} day before",

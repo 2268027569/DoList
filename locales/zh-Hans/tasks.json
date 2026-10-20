@@ -51,6 +51,8 @@
   "detail.clear": "清除",
   "detail.remind": "提前提醒",
   "detail.remindUnit": "分钟",
+  "detail.remindEnable": "开启提醒",
+  "detail.remindOff": "关闭提醒",
   "detail.remindMinutes": "{n} 分钟前",
   "detail.remindHours": "{n} 小时前",
   "detail.remindDays": "{n} 天前",

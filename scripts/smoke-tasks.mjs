@@ -414,6 +414,26 @@ async function focusField(cdp, field, taskId = null) {
   return landed;
 }
 
+/**
+ * Waits until a named control is present, for the writes that add controls.
+ *
+ * Turning a reminder on replaces one button with the whole row of lead choices, so the
+ * `task-changed` event and the re-render are not the same moment: the harness would
+ * otherwise reach for a chip that the page has not drawn yet.
+ */
+async function waitForFieldPresent(cdp, field, timeoutMs = 3_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const present = await evaluate(
+      cdp,
+      `document.querySelector('[data-field="${field}"]') !== null`,
+    );
+    if (present === true) return true;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+  return false;
+}
+
 /** Where the caret is now, by field name — the panel's own answer, not a guess. */
 async function activeField(cdp) {
   return evaluate(
@@ -2292,6 +2312,17 @@ async function main() {
       pass('a deadline without a lead still arms nothing: the lead is the other half');
     } else {
       fail('a deadline without a lead armed a reminder anyway');
+    }
+
+    // Turning the reminder on is one button; the lead choices only exist once it is on.
+    // The form no longer draws six unpressed presets, which read as a multi-select.
+    // Turning it on writes nothing — the chosen lead is what arms anything, so the
+    // harness waits for the choices rather than for a write.
+    await gotoField(remindForm, 'detail-remind-enable');
+    await pressKey(remindForm, 'Enter');
+    if (!(await waitForFieldPresent(remindForm, 'detail-remind-30'))) {
+      fail('the reminder choices never appeared after turning the reminder on');
+      return;
     }
 
     // The preset chip: thirty minutes before the deadline. This is the write that arms
