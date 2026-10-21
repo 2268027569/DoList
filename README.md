@@ -2,8 +2,8 @@
 
 ![License](https://img.shields.io/badge/license-MIT-0FDC78)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-52525B)
-![Languages](https://img.shields.io/badge/i18n-15%20languages-0FDC78)
-![Status](https://img.shields.io/badge/status-spec%20stage-EFAA17)
+![Languages](https://img.shields.io/badge/i18n-2%20now%2C%2015%20planned-0FDC78)
+![Status](https://img.shields.io/badge/status-v0.1.0%20preview-EFAA17)
 
 > A desktop to-do app that stays out of your way.
 > Most of the time it is just a tiny draggable marker on your desktop — click it and the panel unfolds.
@@ -22,10 +22,20 @@ Local-first. No account. No cloud service. 15 languages. MIT licensed.
 - **Native-grade localization** — 15 languages including right-to-left Arabic, with ICU plurals, localized dates, relative times and week-start rules. Not a handful of translated strings.
 - **Your data stays yours** — Local SQLite. Optional sync through any folder you already sync (OneDrive, Dropbox, iCloud Drive, NAS). One-click encrypted bundle export for moving to a new device.
 
+## Download
+
+The first build is on the [Releases page](https://github.com/2268027569/DoList/releases).
+
+- **Windows 10/11 (64-bit):** `YiChen-ToDo-Setup-0.1.0-x64.exe` (installer) or `YiChen-ToDo-Portable-0.1.0-x64.exe`
+- **macOS 11+:** `YiChen-ToDo-0.1.0-arm64.dmg` for Apple Silicon or `YiChen-ToDo-0.1.0-x64.dmg` for Intel
+
+These builds are **not code-signed yet**, so Windows SmartScreen and macOS Gatekeeper will warn on first launch (Windows: More info → Run anyway; macOS: right-click the app → Open). Signing certificates are the remaining piece of M11.
+
 ## Status
 
-**Specification stage.** The scope and feature modules are defined; development has not started yet, so there are no installers to download.
-Decisions locked in: MIT license · `YiChen ToDo` · Windows + macOS · SQLite · 15 launch languages · multi-theme · folder sync + device migration · GitHub Actions with signed builds.
+**v0.1.0 preview.** The marker, panel, task core (lists, priorities, due dates, subtasks, recurrence, undo), reminders with their own popups, the task detail window, themes with system acrylic/vibrancy and the scoreboard clock all work. Still ahead: the remaining 13 launch languages (English and 简体中文 ship today), folder sync, auto-update, and signed/notarized builds.
+
+Releases are built by [`.github/workflows/release.yml`](.github/workflows/release.yml) on every `v*` tag: Windows x64 installer + portable, macOS dmg/zip for both architectures, uploaded to one GitHub Release.
 
 ## Feature modules
 

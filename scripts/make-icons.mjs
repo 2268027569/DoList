@@ -1,7 +1,10 @@
 /**
  * Generates the app's raster icons into `resources/` with no external tooling
- * (docs/ARCHITECTURE.md §2). Electron-builder converts `icon.png` (512×512) into
- * the platform formats; the tray consumes the small PNGs directly.
+ * (docs/ARCHITECTURE.md §2). The tray consumes the small PNGs directly; Windows
+ * packaging takes `icon.ico`, which is written here because electron-builder's own
+ * PNG→ICO step runs a WASM icon tool and dies on a low-memory machine
+ * (`WebAssembly.Memory(): could not allocate memory`). macOS still converts
+ * `icon.png` to `.icns` during its build.
  *
  * Usage: npm run icons
  */
@@ -173,3 +176,41 @@ for (const [file, size, shade] of outputs) {
   writeFileSync(join(outDir, file), render(size, shade));
   console.log(`wrote resources/${file} (${size}×${size})`);
 }
+
+// ---------------------------------------------------------------- ico writer
+
+/**
+ * A Windows icon is a tiny directory followed by the images themselves. Each entry
+ * may hold a PNG verbatim (Vista and later read these), which is what Windows
+ * wants: one bitmap per size, so Explorer picks 16px for the list and 256px for
+ * the large-icon view instead of downscaling a single 512px image.
+ *
+ * 256 is written as 0 in the width/height byte — the field is one byte wide.
+ */
+function encodeIco(images) {
+  const headerSize = 6 + 16 * images.length;
+  let offset = headerSize;
+  const entries = images.map(({ size, png }) => {
+    const entry = Buffer.alloc(16);
+    entry[0] = size >= 256 ? 0 : size;
+    entry[1] = size >= 256 ? 0 : size;
+    entry[2] = 0; // palette size: true colour
+    entry[3] = 0;
+    entry.writeUInt16LE(1, 4); // colour planes
+    entry.writeUInt16LE(32, 6); // bits per pixel
+    entry.writeUInt32LE(png.length, 8);
+    entry.writeUInt32LE(offset, 12);
+    offset += png.length;
+    return entry;
+  });
+  const header = Buffer.alloc(6);
+  header.writeUInt16LE(0, 0);
+  header.writeUInt16LE(1, 2);
+  header.writeUInt16LE(images.length, 4);
+  return Buffer.concat([header, ...entries, ...images.map(({ png }) => png)]);
+}
+
+const ICO_SIZES = [16, 24, 32, 48, 64, 128, 256];
+const ico = encodeIco(ICO_SIZES.map((size) => ({ size, png: render(size, appIcon) })));
+writeFileSync(join(outDir, 'icon.ico'), ico);
+console.log(`wrote resources/icon.ico (${ICO_SIZES.join('/')} px, ${ico.length} bytes)`);

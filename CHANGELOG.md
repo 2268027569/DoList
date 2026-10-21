@@ -3,6 +3,29 @@
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 规范，版本号遵循
 [语义化版本](https://semver.org/lang/zh-CN/)。条目以中文为主；首个公开版本起，Release Notes 会同时提供英文版本。
 
+## [0.1.0] - 2026-10-21
+
+首个公开预览版。Windows 10/11（64 位）与 macOS 11+，本地 SQLite，无账号、无遥测。
+
+### 已实现
+
+- **隐形标记**：圆点 / 胶囊 / 图标三态，可拖拽、边缘吸附、贴边自动隐藏、悬停与展开反馈，收起后不占任务栏
+- **面板**：按标记停靠边决定展开方向、跟随标记移动、透明度、常驻置顶；头部比分牌时钟居中，六视图列表每行带位置序号，当天完成的行划线留在原视图
+- **任务核心**：任务与子任务、优先级、截止日期、重复规则（RRULE）、提醒提前量、拖拽排序、多选批量操作、30 步撤销、回收站与归档
+- **提醒**：独立的置顶弹窗（不抢焦点、跟随标记、多实例堆叠），可直接在弹窗里完成任务；调度器单时钟源、非轮询
+- **任务详情窗**：开在面板旁边的独立窗口，子任务、重复、提醒、附件（副本存放 + 缩略图）与预热机制
+- **外观**：深浅跟随系统、两套主题、系统级毛玻璃（Windows acrylic / macOS vibrancy），主题令牌静态检查
+- **多语言**：English 与简体中文（其余 13 种随 M06 补齐）
+- **发版**：`.github/workflows/release.yml` 打 tag 自动产出 Windows 安装版 + 便携版、macOS 双架构 dmg/zip，汇总到一个 GitHub Release；`latest.yml` / `latest-mac.yml` 为后续自动更新备好
+
+### 已知限制
+
+- 安装包**未代码签名**：Windows SmartScreen 与 macOS Gatekeeper 会提示
+- 文件夹同步、自动更新、设置中心（M10）尚未实现
+- 首次启动的 SmartScreen/Gatekeeper 绕过方式见 README 下载段
+
+[0.1.0]: https://github.com/2268027569/DoList/releases/tag/v0.1.0
+
 ## [Unreleased]
 
 ### Added

@@ -1,0 +1,158 @@
+name: Release
+
+# Only a tag publishes (docs/ARCHITECTURE.md §11). A branch push runs `ci.yml`;
+# this workflow is the one allowed to spend two full platform builds and to write
+# a GitHub Release.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (must already exist), e.g. v0.1.0'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # The tag is a promise that the tree is shippable, so the same gates as CI run
+  # before anything is packed. Cheap (one Linux runner, no native rebuild).
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      # The tag is what the updater compares against, and it is what names the
+      # artifacts; a tag that disagrees with `package.json` would publish a build
+      # that reports a different version than the release it sits under.
+      - name: Tag matches package version
+        env:
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          pkg="$(node -p "require('./package.json').version")"
+          test "v$pkg" = "$TAG" || {
+            echo "::error::tag $TAG does not match package.json version $pkg";
+            exit 1;
+          }
+      - run: npm ci --ignore-scripts
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run i18n:check
+
+  build-windows:
+    name: Windows (x64)
+    needs: verify
+    runs-on: windows-latest
+    env:
+      # Signing is optional: the repository ships without certificates, so an
+      # unset secret means "build unsigned" instead of failing the release. Add
+      # WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD to sign, and the SmartScreen warning
+      # goes away for the builds that follow (§11).
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Package installer and portable app
+        run: npx electron-builder --win --x64 --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+            release/LICENSE*.txt
+
+  build-macos:
+    name: macOS (arm64 + x64)
+    needs: verify
+    runs-on: macos-latest
+    env:
+      # Same rule as Windows: no certificate in the secrets means an unsigned
+      # build, not a red run. Notarization needs CSC_LINK, APPLE_ID,
+      # APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID together (§11).
+      CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK != '' && 'true' || 'false' }}
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Package dmg and zip for both architectures
+        run: npx electron-builder --mac --publish never
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          if-no-files-found: error
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest-mac.yml
+            release/LICENSE*.txt
+
+  publish:
+    name: Publish GitHub Release
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      # The artifacts carry the version without the leading `v`; the body should
+      # show the same string the filenames do, so strip the tag prefix once.
+      - name: Resolve version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - uses: softprops/action-gh-release@v2
+        with:
+          # One release per tag, always at the tag's commit; re-running the job
+          # replaces the attached files rather than creating a second release.
+          name: YiChen ToDo ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          body: |
+            YiChen ToDo ${{ github.ref_name }} — a local-first to-do app for Windows and macOS.
+
+            **Downloads**
+            - Windows: `YiChen-ToDo-Setup-${{ env.VERSION }}-x64.exe` (installer) or `YiChen-ToDo-Portable-${{ env.VERSION }}-x64.exe` (portable)
+            - macOS: `YiChen-ToDo-${{ env.VERSION }}-arm64.dmg` (Apple Silicon) or `YiChen-ToDo-${{ env.VERSION }}-x64.dmg` (Intel); the `.zip` is the same app for auto-update
+
+            **Signing status:** this build is **not code-signed** — Windows SmartScreen and macOS Gatekeeper will warn on first launch. macOS: right-click → Open; Windows: More info → Run anyway.
+
+            Requires Windows 10/11 (64-bit) or macOS 11+. Data is local-only; nothing is uploaded.
+          files: |
+            artifacts/*.exe
+            artifacts/*.dmg
+            artifacts/*.zip
+            artifacts/*.blockmap
+            artifacts/latest.yml
+            artifacts/latest-mac.yml
+            artifacts/LICENSE*.txt

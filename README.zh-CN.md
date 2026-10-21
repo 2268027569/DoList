@@ -2,8 +2,8 @@
 
 ![License](https://img.shields.io/badge/license-MIT-0FDC78)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-52525B)
-![Languages](https://img.shields.io/badge/i18n-15%20languages-0FDC78)
-![Status](https://img.shields.io/badge/status-spec%20stage-EFAA17)
+![Languages](https://img.shields.io/badge/i18n-2%20now%2C%2015%20planned-0FDC78)
+![Status](https://img.shields.io/badge/status-v0.1.0%20preview-EFAA17)
 
 > 一个尽量"不打扰"的桌面待办工具。
 > 平时它只是桌面上一个可拖拽的小标记，点一下才展开面板。
@@ -22,10 +22,20 @@
 - **原生级多语言** — 15 种语言（含阿拉伯语 RTL），复数、日期时间、相对时间、周起始日全部本地化，不是"翻几个字符串"。
 - **数据属于你** — 本地 SQLite；可通过你已有的同步文件夹（OneDrive / Dropbox / iCloud Drive / 坚果云 / NAS）做轻量同步；一键导出加密包，换设备直接迁移。
 
+## 下载
+
+第一个版本在 [Releases 页面](https://github.com/2268027569/DoList/releases)。
+
+- **Windows 10/11（64 位）**：`YiChen-ToDo-Setup-0.1.0-x64.exe`（安装版）或 `YiChen-ToDo-Portable-0.1.0-x64.exe`（便携版）
+- **macOS 11+**：`YiChen-ToDo-0.1.0-arm64.dmg`（Apple Silicon）或 `YiChen-ToDo-0.1.0-x64.dmg`（Intel）
+
+这批产物**尚未代码签名**，首次启动时 Windows SmartScreen 与 macOS Gatekeeper 会提示（Windows：更多信息 → 仍要运行；macOS：右键应用 → 打开）。签名证书是 M11 剩余的一环。
+
 ## 当前状态
 
-**规格阶段。** 范围与功能模块已确定，尚未开始编码，因此暂时没有安装包可下载。
-已锁定决策：MIT 许可证 · 应用名 `YiChen ToDo` · Windows + macOS · SQLite · 首发 15 种语言 · 多主题 · 文件夹同步 + 设备迁移 · GitHub Actions 自动构建与签名。
+**v0.1.0 预览版。** 隐形标记、面板、任务核心（清单、优先级、截止日期、子任务、重复、撤销）、带独立弹窗的提醒、任务详情窗、系统毛玻璃与多主题、比分牌时钟都已可用。尚未完成：另外 13 种首发语言（当前只有 English 与简体中文）、文件夹同步、自动更新、签名与公证。
+
+每次打 `v*` tag 都会由 [`.github/workflows/release.yml`](.github/workflows/release.yml) 产出 Windows x64 安装版 + 便携版、macOS 双架构 dmg/zip，并汇总到同一个 GitHub Release。
 
 ## 功能模块
 

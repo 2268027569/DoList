@@ -690,10 +690,12 @@ Chromium 在「指针捕获 + 窗口移动」时会重新定位系统光标（§
 
 - electron-builder 关键配置：`appId: com.yichen.todolist`、`productName: YiChen ToDo`、`asar: true` + `asarUnpack` 原生模块、`files` 白名单（排除源码与 devDeps 残留）、`npmRebuild: true`（对 Node-API 模块并非 ABI 必需，保留以覆盖将来可能引入的非 N-API 原生依赖）。
 - 产物：Windows `nsis`（含 `portable`）x64/arm64；macOS `dmg` + `zip`，`x64` + `arm64`（后续可出 Universal）。
-- 签名：Windows 需 OV/EV 证书（**需你提前申请**）；macOS 需 Developer ID + Apple 公证凭据，CI 中通过加密 Secrets 注入，绝不入库。
-- 更新：`electron-updater` + GitHub Releases，稳定/beta 双通道；更新说明取自 Release Notes。
-- CI：现有 [ci.yml](../.github/workflows/ci.yml) 的脚手架检测会在 `package.json` 出现后自动生效；M11 追加三平台打包与发布工作流（仅 tag 触发）。
-- 版本：`package.json` 版本号与 `CHANGELOG.md` 顶部条目由发布脚本同步。
+- 签名：Windows 需 OV/EV 证书（**需你提前申请**）；macOS 需 Developer ID + Apple 公证凭据，CI 中通过加密 Secrets 注入，绝不入库。证书未配置时工作流**不失败**，而是产出未签名包（`CSC_IDENTITY_AUTO_DISCOVERY=false`），并在 Release Notes 里写明绕过系统提示的方法——签名是 M11 的剩余项，不该阻塞首个版本。
+- 更新：`electron-updater` + GitHub Releases，稳定/beta 双通道；更新说明取自 Release Notes。`electron-builder.yml` 的 `publish` 段只负责让打包器产出 `latest.yml` / `latest-mac.yml`，真正的上传由发布工作流统一做（两个平台必须落进同一个 Release）。
+- CI：日常校验仍是 [ci.yml](../.github/workflows/ci.yml)（分支 / PR，Linux，只跑静态检查与单测）。
+- 发布：[release.yml](../.github/workflows/release.yml)，仅 `v*` tag（或手动指定 tag）触发：`verify`（tag 必须等于 `package.json` 版本 → lint / typecheck / test / i18n:check）→ `build-windows`（x64 nsis + portable）与 `build-macos`（dmg + zip，arm64 + x64）并行 → `publish`（汇总两个 artifact，用 `GITHUB_TOKEN` 建一个 GitHub Release，重跑只会替换附件，不会建第二个 Release）。
+- Secrets：`WIN_CSC_LINK` / `WIN_CSC_KEY_PASSWORD`（Windows 签名）；`CSC_LINK` / `CSC_KEY_PASSWORD` / `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID`（macOS 签名与公证）。全部为空 = 未签名构建。
+- 版本：`package.json` 版本号与 `CHANGELOG.md` 顶部条目由发布脚本同步；打 tag 前先改这两处，`verify` 会拒绝不一致的 tag。
 
 ---
 
