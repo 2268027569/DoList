@@ -122,9 +122,19 @@ export interface Attachment {
 
 /**
  * Row order `queryTasks` returns. `manual` is the stored `sort_order`; `completed`
- * is newest completion first, which is the axis an archive reads along (M03 D4).
+ * is newest completion first, which is the axis an archive reads along (M03 D4);
+ * `active` is the list's own order — the work still open, then what was finished
+ * today, so an open view never mixes a struck-through row into the rows to be done.
  */
-export const TASK_SORTS = ['manual', 'due', 'priority', 'created', 'title', 'completed'] as const;
+export const TASK_SORTS = [
+  'manual',
+  'due',
+  'priority',
+  'created',
+  'title',
+  'completed',
+  'active',
+] as const;
 export type TaskSort = (typeof TASK_SORTS)[number];
 
 export interface TaskFilter {
@@ -138,6 +148,14 @@ export interface TaskFilter {
   /** Half-open window over `dueAt`, `[dueFrom, dueTo)`. */
   dueFrom?: number;
   dueTo?: number;
+  /**
+   * Lower bound over `completedAt`. An open view uses it to keep the rows finished
+   * today on screen, struck through, while the ones finished earlier stay in the
+   * archive where they belong (M03 D3).
+   */
+  completedFrom?: number;
+  /** Upper bound over `completedAt`, exclusive. */
+  completedTo?: number;
   sort?: TaskSort;
   limit?: number;
   offset?: number;

@@ -90,6 +90,10 @@ export function TaskList(): ReactElement {
       titles: tasks.map((task) => task.title),
       rows: tasks.map((task) => ({
         title: task.title,
+        // The status drives what the row looks like (struck through, which controls it
+        // keeps), so the harness can tell a finished row from an open one by reading
+        // what the list drew rather than by going back to the database.
+        status: task.status,
         priority: task.priority,
         due: dueChip(task.dueAt, task.dueHasTime, i18n.language)?.text ?? null,
         // The subtask tally goes with the row report for the same reason the chips

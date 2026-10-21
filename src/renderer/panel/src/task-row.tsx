@@ -49,8 +49,8 @@ export interface TaskRowProps {
 }
 
 /**
- * One line of the view the panel is showing: a selection bar, a done circle, the
- * title, the at-a-glance chips, a pencil, a grip.
+ * One line of the view the panel is showing: a number, a selection bar, a done circle,
+ * the title, the at-a-glance chips, a pencil, a grip.
  *
  * The two leading controls answer two different questions, and they are drawn so that
  * they cannot be mistaken for one another: the *bar* at the very edge is the row's
@@ -89,6 +89,13 @@ export const TaskRow = memo(function TaskRow({
   const finished = done || task.status === 'cancelled';
   // And in the archives the row drops the controls that are about work in progress.
   const archived = isArchiveView(view);
+  // A row finished today is here to be read, not rearranged: the order of the list is
+  // the order of the work still to be done (filterFor's `active` sort keeps it last).
+  const canReorder = !archived && !finished;
+  // Its selection bar goes with the grip, and for the same reason: a selection is a
+  // command waiting to be run on work still to be done. The done circle stays, because
+  // that is how a tick made by mistake is taken back.
+  const canSelect = canReorder;
   const due = dueChip(task.dueAt, task.dueHasTime, i18n.language);
   const priority = PRIORITY[task.priority];
   // A parent's checklist reads as `2/3`, and turns green once it is complete — the
@@ -104,7 +111,7 @@ export const TaskRow = memo(function TaskRow({
       // the focus. `aria-keyshortcuts` announces it without drawing anything.
       onKeyDown={(event) => {
         // An archive holds no work to arrange: there is no order for a move to change.
-        if (archived) return;
+        if (!canReorder) return;
         if (!event.altKey) return;
         if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
         event.preventDefault();
@@ -124,6 +131,22 @@ export const TaskRow = memo(function TaskRow({
       style={dragOffsetY === null ? undefined : { transform: `translateY(${dragOffsetY}px)` }}
     >
       {/*
+       * The row's number (M03). Every row of every view carries one, so the user can
+       * refer to "task 3" and the list can be read at a glance even when its chips are
+       * busy. It is positional and therefore not part of the task: it changes when the
+       * list is reordered or a view is switched, and a screen reader skips it — the
+       * row's own title is what it announces.
+       */}
+      <span
+        aria-hidden="true"
+        data-field="row-index"
+        data-task-id={task.id}
+        className="w-4 shrink-0 text-right text-[11px] leading-5 tabular-nums text-[var(--text-muted)]"
+      >
+        {index + 1}
+      </span>
+
+      {/*
        * The row's multi-select (M02 S7), drawn as a bar in the margin rather than a
        * box beside the circle. It used to be a square, and a square next to a circle
        * is a difference the eye has to work out; a filled bar at the very edge of the
@@ -135,9 +158,11 @@ export const TaskRow = memo(function TaskRow({
        * selection is a deliberate act and deserves to be unmistakable.
        *
        * An archive drops it altogether: a selection is a command waiting to be run on
-       * work that is still open, and there is none of that here (M03 D5).
+       * work that is still open, and there is none of that here (M03 D5). A row
+       * finished today keeps to the same rule — it is on screen to be read, not acted
+       * on in bulk.
        */}
-      {archived ? null : (
+      {canSelect ? (
         <button
           type="button"
           role="checkbox"
@@ -159,7 +184,7 @@ export const TaskRow = memo(function TaskRow({
             }`}
           />
         </button>
-      )}
+      ) : null}
 
       {/*
        * The done circle. 已完成 keeps it: ticking one of its rows is how a task is
@@ -269,7 +294,7 @@ export const TaskRow = memo(function TaskRow({
        * of the work still to be done, and the archives are ordered by when rows were
        * finished (M03 D4) — a drag there would rearrange something no one will read.
        */}
-      {archived ? null : (
+      {canReorder ? (
         <button
           type="button"
           aria-label={t('row.dragHandle')}
@@ -283,7 +308,7 @@ export const TaskRow = memo(function TaskRow({
         >
           ⋮⋮
         </button>
-      )}
+      ) : null}
     </li>
   );
 });

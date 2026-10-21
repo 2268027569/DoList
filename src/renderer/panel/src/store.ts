@@ -3,7 +3,7 @@ import { create } from 'zustand';
 import type { TaskBulkOp, TaskQueryInput } from '@shared/contracts/task';
 import { isArchiveView } from '@shared/types/app';
 import type { BootParams, PanelState, PanelView } from '@shared/types/app';
-import type { ReorderScope, TaskListItem } from '@shared/types/task';
+import type { ReorderScope, TaskListItem, TaskStatus } from '@shared/types/task';
 import { localDayBounds } from '@shared/utils/day';
 import { moveWithin } from '@shared/utils/sort-order';
 
@@ -17,6 +17,27 @@ const INBOX_FILTER: TaskQueryInput = { listId: null, parentId: null, status: ['t
 
 /** The group the list's manual order lives in, which is also what a move rewrites. */
 const INBOX_SCOPE: ReorderScope = { kind: 'top', listId: null };
+
+/**
+ * What an open view draws: the unfinished rows, plus the ones finished today.
+ *
+ * A ticked row stays in the list — struck through, still numbered — because the tick
+ * should read as "done", not as "gone": sending it to the archive on the same frame
+ * makes the row look deleted, and the day's work is worth seeing once it is finished.
+ * The boundary is the local day, so yesterday's completions are the archive's alone;
+ * `sort: 'active'` keeps the finished rows below the open ones.
+ */
+const ACTIVE_STATUSES: TaskStatus[] = ['todo', 'doing', 'done'];
+
+function openView(filter: TaskQueryInput = {}): TaskQueryInput {
+  return {
+    ...INBOX_FILTER,
+    ...filter,
+    status: ACTIVE_STATUSES,
+    completedFrom: localDayBounds(Date.now()).start,
+    sort: 'active',
+  };
+}
 
 /**
  * Local midnight `offset` days from today. Built from the date parts rather than by
@@ -41,24 +62,24 @@ function filterFor(view: PanelView): TaskQueryInput {
 
   switch (view) {
     case 'inbox':
-      return INBOX_FILTER;
+      return openView();
 
     // 今日 is "due by the end of the local day", overdue included: the repository's
     // window over `due_at` is half-open, and its open end is exactly that. A task
     // with no due date is not due today, so it stays in the Inbox rather than being
     // pulled in to make the view look fuller.
     case 'today':
-      return { ...INBOX_FILTER, dueTo: localDayBounds(Date.now()).end };
+      return openView({ dueTo: localDayBounds(Date.now()).end });
 
     // 明天 is a closed day (`dueFrom` 明天零点, `dueTo` 明天末尾), so overdue rows stay
     // out of it: they are today's business, and 今日 is where the overdue chip lives.
     case 'tomorrow':
-      return { ...INBOX_FILTER, dueFrom: tomorrow.start, dueTo: tomorrow.end };
+      return openView({ dueFrom: tomorrow.start, dueTo: tomorrow.end });
 
     // 即将到期 is tomorrow through the seventh day, today excluded — today has a view
     // of its own, and a list that repeated it would be the same list twice.
     case 'upcoming':
-      return { ...INBOX_FILTER, dueFrom: tomorrow.start, dueTo: localDayBounds(dayStart(7)).end };
+      return openView({ dueFrom: tomorrow.start, dueTo: localDayBounds(dayStart(7)).end });
 
     // The archives. 已完成 reads newest first: `sort_order` is the order the open rows
     // were dragged into, which says nothing about when they were finished (D4).
@@ -227,10 +248,14 @@ export const usePanelStore = create<PanelStore>((set, get) => ({
 
   moveTask: async (id, to) => {
     const current = get().tasks;
-    const from = current.findIndex((task) => task.id === id);
+    // Only the open rows are ordered. A row finished today is pinned below them by
+    // the view's own sort (`active`, filterFor), and it has no grip — moving it would
+    // be moving something the user cannot pick up.
+    const open = current.filter((task) => task.status !== 'done');
+    const from = open.findIndex((task) => task.id === id);
     if (from < 0) return false;
 
-    const ids = current.map((task) => task.id);
+    const ids = open.map((task) => task.id);
     const next = moveWithin(ids, from, to);
     // The same array by reference means the row would not move: sending it anyway
     // would be a write, a reorder event and a re-fetch for nothing.

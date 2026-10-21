@@ -290,4 +290,13 @@
 - 单测 290 → **292 例**（`boot.test.ts` 补 `glass` 参数的解析与 `bootQuery` 往返）；`lint` / `typecheck` / `i18n:check` / `build` / `smoke:tasks` / `smoke:marker` 全绿
 - 已知取舍：系统材质在窗口的最终矩形上绘制，**没有可动画的尺寸**，所以展开 / 收起的 200/180ms 动画仍然只动卡片（内容与 50% 填充），材质那一层是直接就位的；换成逐帧 `setBounds` 会违反 §9.5 的低功耗纪律
 
+### M03 当天完成留在列表 + 行号 + 面板时钟（2026-10-21）
+
+- 面板头部新增**时钟**（`<time data-field="panel-clock">`）：显示 `HH:mm`，按整分钟对齐刷新（不是 mount 起每 60 秒一算），`title` 带完整日期时间，语言跟随当前 i18n locale
+- 每行开头新增**位置序号**（`data-field="row-index"`，`aria-hidden`）：六个视图每行都有，随视图 / 排序 / 拖动变化；它是位置而不是数据，不落库
+- 四个开放视图（收件箱 / 今天 / 明天 / 即将到期）**保留当天已完成的任务**：标题划线、排在未完成行之后（新排序键 `sort: 'active'`：`done` 置底、按 `completed_at` 倒序）；隔天完成的才只留在「已完成」。查询新增 `completedFrom` / `completedTo`，条件是 `(t.status <> 'done' OR t.completed_at >= ?)`——开放行没有 `completed_at`，裸比较会把整张清单清空
+- 已完成的行在开放视图里**不可拖动、不可多选**（顺序与批量命令只关于还要做的事），完成圆钮保留以便撤销误勾；`moveTask` 只在开放行之间计算位置
+- 冒烟 `smoke:tasks` **98 → 100 项**：`tasks-rendered` 证据新增每行 `status`，phase 5 改为断言"新实例插在未完成区、被勾掉的那行沉底且 status 为 done"，并新增两条 DOM 断言（行号 `1,2,3`、头部时钟格式）
+- 单测 292 → **294 例**（`task-query.test.ts` 补 `active` 排序与 `completedFrom/To` 的 `<> 'done'` 条件）
+
 [Unreleased]: https://github.com/2268027569/DoList/commits/main

@@ -76,4 +76,23 @@ describe('buildTaskQuery', () => {
     expect(TASK_SORTS).toContain('completed');
     expect(buildTaskQuery({ sort: 'completed' }).orderBy).toContain('t.completed_at DESC');
   });
+
+  it('keeps the rows finished today below the open ones in an open view', () => {
+    // The open views draw the day's completions struck through, at the bottom: a done
+    // row mixed into the work still to be done would be a crossed-out line in the
+    // middle of the list the user is reading (M03).
+    expect(TASK_SORTS).toContain('active');
+    const orderBy = buildTaskQuery({ sort: 'active' }).orderBy;
+    expect(orderBy.indexOf("t.status = 'done'")).toBeLessThan(orderBy.indexOf('t.sort_order'));
+    expect(orderBy).toContain('t.completed_at');
+  });
+
+  it('filters the day\u2019s completions with a half-open window', () => {
+    const query = buildTaskQuery({ completedFrom: 10, completedTo: 20 });
+    // The bound applies to the finished rows only: an open row has no `completed_at`,
+    // and `NULL >= 10` would be false, taking every unfinished task out of the view.
+    expect(query.where).toContain("t.status <> 'done' OR t.completed_at >= ?");
+    expect(query.where).toContain("t.status <> 'done' OR t.completed_at < ?");
+    expect(query.params).toEqual([10, 20]);
+  });
 });

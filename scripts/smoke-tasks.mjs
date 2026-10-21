@@ -555,7 +555,7 @@ function readTasks(scope = 'topLevel') {
       .prepare(
         'SELECT id, title, status, priority, due_at AS dueAt, due_has_time AS dueHasTime, ' +
           'list_id AS listId, parent_id AS parentId, repeat_rule AS repeatRule, ' +
-          'repeat_mode AS repeatMode, deleted_at AS deletedAt ' +
+          'repeat_mode AS repeatMode, deleted_at AS deletedAt, completed_at AS completedAt ' +
           `FROM tasks WHERE ${where} ORDER BY sort_order ASC, created_at ASC`,
       )
       .all();
@@ -571,6 +571,24 @@ function readTasks(scope = 'topLevel') {
  */
 function inboxRows() {
   return readTasks().filter((row) => row.status === 'todo' || row.status === 'doing');
+}
+
+/**
+ * The rows an open view draws: the same open rows, plus what was finished today.
+ *
+ * A ticked row stays on screen — struck through, below the open ones — so an open
+ * view's expected contents are "still open" *or* "finished after local midnight".
+ * `inboxRows()` deliberately stays the open rows only: it is what reorder and bulk
+ * act on, and a finished row is not something either of them can move.
+ */
+function openViewRows() {
+  const midnight = dayStart(0);
+  return readTasks().filter(
+    (row) =>
+      row.status === 'todo' ||
+      row.status === 'doing' ||
+      (row.status === 'done' && (row.completedAt ?? 0) >= midnight),
+  );
 }
 
 /**
@@ -1760,23 +1778,30 @@ async function main() {
     }
 
     // The list is read after the detail closes, because that is when the list is the
-    // thing on screen and the thing that reports what it drew (M02 D10: the ticked row
-    // leaves the Inbox filter and the new occurrence takes its place).
+    // thing on screen and the thing that reports what it drew (M02 D10 / M03: the
+    // ticked row stays in the Inbox, struck through and below the open ones, while the
+    // new occurrence takes its place among the work still to be done).
     const listSince = Date.now();
     await pressKeyToClose(form2, 'Escape');
     await waitForEvent('detail-closed', 5_000, listSince);
-    // The render that put this task's finished sibling away was drawn when the tick was
-    // written, before the detail closed — the window closing does not redraw the list.
+    // The render that drew the tick was written before the detail closed — the window
+    // closing does not redraw the list.
     const afterTickRender = latestEvent('tasks-rendered');
     if (
-      afterTickRender?.detail?.count === 2 &&
+      afterTickRender?.detail?.count === 3 &&
       afterTickRender?.detail?.titles?.[0] === SECOND_TASK &&
-      afterTickRender?.detail?.titles?.[1] === FIRST_TASK
+      afterTickRender?.detail?.titles?.[1] === FIRST_TASK &&
+      afterTickRender?.detail?.titles?.[2] === FIRST_TASK &&
+      afterTickRender?.detail?.rows?.[2]?.status === 'done'
     ) {
-      pass('the list drew the new occurrence where the completed row had been', afterTickRender.detail.titles);
+      pass('the list kept the finished row at the bottom and drew the new occurrence above it', {
+        titles: afterTickRender.detail.titles,
+        statuses: afterTickRender.detail.rows.map((row) => row.status),
+      });
     } else {
       fail(
-        `the list drew ${JSON.stringify(afterTickRender?.detail ?? null)}, expected the new occurrence in the completed row's place`,
+        `the list drew ${JSON.stringify(afterTickRender?.detail ?? null)}, expected the new occurrence ` +
+          'above the finished row it replaced',
       );
     }
     // The tally is the one thing that tells the swapped-in row from the one it
@@ -1789,10 +1814,33 @@ async function main() {
       );
     }
 
+    // The list's own marks: every row is numbered, the finished one included, and the
+    // header carries a clock. Both are read from the DOM rather than from the report
+    // above, because the report says what was drawn and this says what is on screen.
+    const panelMarks = await evaluate(
+      cdp,
+      `(() => ({
+         clock: document.querySelector('[data-field="panel-clock"]')?.textContent?.trim() ?? null,
+         numbers: [...document.querySelectorAll('[data-field="row-index"]')]
+           .map((node) => node.textContent.trim()),
+       }))()`,
+    );
+    if (panelMarks?.numbers?.join(',') === '1,2,3') {
+      pass('every row carries its position, in the order the list is read', panelMarks.numbers);
+    } else {
+      fail(`the rows are numbered ${JSON.stringify(panelMarks?.numbers ?? null)}, expected 1,2,3`);
+    }
+    if (typeof panelMarks?.clock === 'string' && /^\d{1,2}:\d{2}(\s?[AP]M)?$/.test(panelMarks.clock)) {
+      pass('the panel header carries a clock', { clock: panelMarks.clock });
+    } else {
+      fail(`the panel clock reads ${JSON.stringify(panelMarks?.clock ?? null)}`);
+    }
+
     // --- phase 7: a multi-selection takes one bulk command (slice S7) ---------
     // The rows to act on are read off the database rather than remembered from
-    // earlier: the completed instance left the Inbox and the new occurrence took its
-    // place, so the ids this run holds from phase 2 are no longer both on screen.
+    // earlier: the working rows are now the second task and the new occurrence, while
+    // the instance that was ticked sits below them, finished and out of reach of a
+    // move. `inboxRows()` is exactly those working rows.
     const selectedRows = inboxRows();
     // Read before the command, because the undo has to put these exact values back —
     // not a default. The ticked task repeats, so its new occurrence inherited the
@@ -1926,21 +1974,26 @@ async function main() {
     }
 
     // And back in the Inbox the same row is still there, alongside the two that are
-    // not due today: the views differ by their filter alone, and no row was copied.
+    // not due today and the one finished earlier in this run: the views differ by
+    // their filter alone, and no row was copied.
     await gotoField(cdp, 'view-inbox');
     const inboxSince = Date.now();
     await pressKey(cdp, 'Enter');
     const inboxRender = await waitForEvent('tasks-rendered', 5_000, inboxSince);
+    const inboxExpected = openViewRows();
     if (
       inboxRender?.detail?.view === 'inbox' &&
-      inboxRender?.detail?.count === 3 &&
+      inboxRender?.detail?.count === inboxExpected.length &&
       inboxRender?.detail?.titles?.includes(TODAY_TASK)
     ) {
-      pass('the Inbox holds the same row plus the two that are not due today', inboxRender.detail.titles);
+      pass(
+        'the Inbox holds the same row plus the two that are not due today — and the finished one',
+        inboxRender.detail.titles,
+      );
     } else {
       fail(
-        `the Inbox drew ${JSON.stringify(inboxRender?.detail ?? null)}, expected three rows ` +
-          `including ${TODAY_TASK}`,
+        `the Inbox drew ${JSON.stringify(inboxRender?.detail ?? null)}, expected ` +
+          `${inboxExpected.length} row(s) including ${TODAY_TASK}`,
       );
     }
 
@@ -2312,7 +2365,7 @@ async function main() {
     await gotoField(cdp, 'view-upcoming');
     await pressKey(cdp, 'Enter');
     const upcomingRender = await waitForEvent('tasks-rendered', 5_000, upcomingSince);
-    const expectedUpcoming = inboxRows().filter(
+    const expectedUpcoming = openViewRows().filter(
       (row) => row.dueAt !== null && row.dueAt >= dayStart(1) && row.dueAt < dayStart(8),
     );
     if (
@@ -2334,7 +2387,7 @@ async function main() {
 
     // And the Inbox is back, quick-add and all: every one of the six views is the same
     // list read through a different filter, so none of them took a row away from it.
-    const openNow = inboxRows();
+    const openNow = openViewRows();
     await gotoField(cdp, 'view-inbox');
     const lastSince = Date.now();
     await pressKey(cdp, 'Enter');

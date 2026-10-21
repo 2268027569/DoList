@@ -141,6 +141,8 @@ export const taskQueryInput = z.object({
   text: z.string().max(200).optional(),
   dueFrom: timestamp.optional(),
   dueTo: timestamp.optional(),
+  completedFrom: timestamp.optional(),
+  completedTo: timestamp.optional(),
   sort: sort.optional(),
   limit: z.number().int().min(1).max(TASK_QUERY_MAX_LIMIT).optional(),
   offset: z.number().int().min(0).optional(),

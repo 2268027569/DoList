@@ -29,6 +29,12 @@ const ORDER_BY: Record<string, string> = {
   created: 't.created_at ASC',
   title: 't.title COLLATE NOCASE ASC',
   completed: 't.completed_at DESC, t.sort_order ASC',
+  // The open views: the work still to be done keeps the manual order, and what was
+  // finished today follows it, newest first. A done row mixed into the open ones
+  // would be a struck-through line in the middle of the list the user is working on.
+  active:
+    "CASE WHEN t.status = 'done' THEN 1 ELSE 0 END ASC, " +
+    "CASE WHEN t.status = 'done' THEN t.completed_at END DESC, t.sort_order ASC",
 };
 
 export interface TaskQuerySql {
@@ -87,6 +93,21 @@ export function buildTaskQuery(filter: TaskFilter = {}): TaskQuerySql {
   if (filter.dueTo !== undefined) {
     clauses.push('t.due_at < ?');
     params.push(filter.dueTo);
+  }
+
+  // The completion window is asked of the rows that *have* a completion. A row still
+  // to be done has no `completed_at`, and SQL's `NULL >= 10` is not true — writing the
+  // bound as a plain comparison would drop every open task from the list it belongs
+  // to the moment a view asked "what was finished today?". The `<> 'done'` half is
+  // what keeps them: the window is a bound on the finished rows, not a filter of its
+  // own (M03).
+  if (filter.completedFrom !== undefined) {
+    clauses.push("(t.status <> 'done' OR t.completed_at >= ?)");
+    params.push(filter.completedFrom);
+  }
+  if (filter.completedTo !== undefined) {
+    clauses.push("(t.status <> 'done' OR t.completed_at < ?)");
+    params.push(filter.completedTo);
   }
 
   return {
