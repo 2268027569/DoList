@@ -87,7 +87,7 @@ toDoList/
 
 **两条结构性决定**：
 
-1. **五个渲染入口**（`panel/index.html`、`marker/index.html`、`reminder/index.html`、`detail/index.html`、`clock/index.html`），不做单入口路由。标记页零依赖 React、零依赖 i18next，只加载约 23 kB 的 DOM + CSS + 静态文案，保证常驻内存与 CPU 最低。提醒弹窗（M04）是第三个入口，也是一个独立窗口的页面：它只在提醒无人应答时出现，不跟着面板常驻，所以单列一份而不是塞进面板里（§5.3.2）。任务详情（M02 D6 改版）是第四个入口：它开在面板**旁边**而不是替换面板内容，两扇窗是两个渲染进程，因此必须各有一个页面（§9.1.2）。桌面时钟（M03）是第五个入口，同样零 React、零 i18next：它和标记一样从启动常驻到退出，每秒只改几个文本节点，所以不值得为它加载一整套框架。
+1. **四个渲染入口**（`panel/index.html`、`marker/index.html`、`reminder/index.html`、`detail/index.html`），不做单入口路由。标记页零依赖 React、零依赖 i18next，只加载约 23 kB 的 DOM + CSS + 静态文案，保证常驻内存与 CPU 最低。提醒弹窗（M04）是第三个入口，也是一个独立窗口的页面：它只在提醒无人应答时出现，不跟着面板常驻，所以单列一份而不是塞进面板里（§5.3.2）。任务详情（M02 D6 改版）是第四个入口：它开在面板**旁边**而不是替换面板内容，两扇窗是两个渲染进程，因此必须各有一个页面（§9.1.2）。
 
    M0 实测产物：`marker.js 5.26 kB + marker.css 7.78 kB`（另需共享 i18n chunk 85.26 kB）、`panel.js 587.45 kB + panel.css 19.74 kB`、`main 377.85 kB`、`preload 3.36 kB`。
 
@@ -97,9 +97,7 @@ toDoList/
 
    M02 D6 改版实测产物：`detail.js 48.28 kB + detail.css 32.37 kB`（表单从面板搬出后的独立入口，与 `panel.js 45.86 kB` 同量级，React 与格式化仍是共享 chunk），`main 526.37 kB`、`preload 11.74 kB`。
 
-   M03 桌面时钟实测产物：`clock.js 2.83 kB + clock.css 15.33 kB`（样式几乎全是 `base.css` 的主题令牌与重置；脚本只是 `Intl` 格式化与几个 `textContent` 写入）。
-
-2. **`src/shared` 只放纯函数与类型**，不 import `electron`、不 import Node 内置模块；这样吸附算法、RRULE、格式化函数可以直接被 Vitest 单测覆盖，也能被五个渲染入口共用。
+2. **`src/shared` 只放纯函数与类型**，不 import `electron`、不 import Node 内置模块；这样吸附算法、RRULE、格式化函数可以直接被 Vitest 单测覆盖，也能被四个渲染入口共用。
 
 ---
 
@@ -503,8 +501,6 @@ theme: { extend: { colors: {
 | 其他 | `resizable: false`、`maximizable: false`、`fullscreenable: false` | `resizable: false`，`movable: false`（位置由程序计算） | `resizable: false`、`maximizable: false`、`minimizable: false`、`spellcheck: false`；每实例一个窗口，位置由 `placeReminderPopup` 算出 |
 
 **关键取舍**：标记窗口**不能**用 `setIgnoreMouseEvents`——那是点击穿透，会让标记彻底点不到。
-
-**桌面时钟（M03，`windows/clock.ts`）**：固定 212×96（`CLOCK_SIZE`），`focusable: false`、`showInactive()` 显示、`setIgnoreMouseEvents(true)`——这三条是同一件事的三个面：时钟是环境信息，不是一块可以操作的面板，点它时应落到它下面的窗口上；`movable: false`，位置只由 `placeClock(workArea)` 算（主显示器工作区水平居中、顶部留 `CLOCK_TOP_GAP_PX = 12`，与任务栏/菜单栏让位）。窗口参数与面板同组（`windowMaterialOptions(boot.glass)`、`skipTaskbar`、`alwaysOnTop(true, 'screen-saver')`、darwin `type: 'panel'` + 全空间可见），监听 `display-metrics-changed` / `display-added` / `display-removed` 重新摆位。冒烟证据为 `clock-placed` 事件里的 `{ bounds, workArea }`。
 
 **详情窗口（M02 D6 改版）**：除 `focusable: true`（详情要拿键盘，用户点的是「编辑」）与 `spellcheck: false` 外，与面板窗口是同一组参数——同尺寸（`clampPanelSize`，冒烟固定为 `PANEL_SIZE`）、同 `transparent`、同 `skipTaskbar`、同置顶。它不随应用常驻，但会**预热**：启动后 1.2 秒与面板每次显示后 260ms 各建一扇 `show:false` 的详情窗并加载页面（§9.1.2），面板收起时销毁；真正打开的那扇关闭即销毁。
 

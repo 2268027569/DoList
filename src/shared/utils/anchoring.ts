@@ -379,35 +379,6 @@ export function placeReminderPopup(
   return { ...base, y: snapToWorkArea({ ...base, y }, workArea, 0).y };
 }
 
-/**
- * The desktop clock's window size (docs/FEATURES.md M03).
- *
- * Fixed rather than resizable: it is a scoreboard, not a surface to work in. The
- * proportions are the card's — two digit wells, a colon, a seconds column and one
- * letter-spaced date line — so the window is sized once for exactly that.
- */
-export const CLOCK_SIZE: { width: number; height: number } = { width: 212, height: 96 };
-
-/** How far below the work-area top edge the clock hangs. */
-export const CLOCK_TOP_GAP_PX = 12;
-
-/**
- * Places the desktop clock at the top centre of the work area (M03).
- *
- * Centred rather than anchored: the clock is the one surface that does not belong to
- * the marker, so it must read as the screen's own header — same place on every launch,
- * every display, whatever the marker is doing. The gap is measured from the work area,
- * not the display, so a Windows taskbar moved to the top (or the macOS menu bar) pushes
- * the card down instead of hiding it under the system chrome.
- */
-export function placeClock(
-  workArea: Rect,
-  size: { width: number; height: number } = CLOCK_SIZE,
-  gap: number = CLOCK_TOP_GAP_PX,
-): Rect {
-  return place(workArea.x + (workArea.width - size.width) / 2, workArea.y + gap, size, workArea);
-}
-
 /** Clamps a placement into the work area, keeping the given size. */
 function place(
   x: number,

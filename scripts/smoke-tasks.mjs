@@ -1830,61 +1830,55 @@ async function main() {
       fail(`the rows are numbered ${JSON.stringify(panelMarks?.numbers ?? null)}, expected 1,2,3`);
     }
 
-    // The desktop clock (M03) is a window of its own, so it is read from its own page
-    // rather than from the panel's. It is resident and shows regardless of the panel,
-    // which is the whole reason it was moved out of the header.
-    const clockPage = await attachEntry('clock', 8_000);
-    const clockMarks =
-      clockPage === null
-        ? null
-        : await evaluate(
-            clockPage,
-            `(() => {
-               const text = (field) =>
-                 document.querySelector('[data-field="' + field + '"]')?.textContent?.trim() ?? null;
-               return {
-                 card: document.querySelector('[data-field="clock-card"]') !== null,
-                 hour: text('clock-hour'),
-                 minute: text('clock-minute'),
-                 second: text('clock-second'),
-                 date: text('clock-date'),
-               };
-             })()`,
-          );
-    if (clockPage !== null) clockPage.close();
+    // The clock is a scoreboard card centred in the panel's header (M03), so it is
+    // read — and measured — on the panel's own page. Geometry is part of the claim:
+    // "centred at the top" is a position, not a style, and a header that drifts left
+    // when the view name gets longer would still pass a text-only assertion.
+    const clockMarks = await evaluate(
+      cdp,
+      `(() => {
+         const text = (field) =>
+           document.querySelector('[data-field="' + field + '"]')?.textContent?.trim() ?? null;
+         const card = document.querySelector('[data-field="panel-clock"]');
+         const panel = document.querySelector('.panel-card');
+         if (card === null || panel === null) return null;
+         const clockRect = card.getBoundingClientRect();
+         const panelRect = panel.getBoundingClientRect();
+         return {
+           hour: text('panel-clock-hour'),
+           minute: text('panel-clock-minute'),
+           second: text('panel-clock-second'),
+           date: text('panel-clock-date'),
+           offsetX: clockRect.x + clockRect.width / 2 - (panelRect.x + panelRect.width / 2),
+           offsetY: clockRect.y - panelRect.y,
+         };
+       })()`,
+    );
     if (
-      clockMarks?.card === true &&
+      clockMarks !== null &&
       /^\d{1,2}$/.test(clockMarks.hour ?? '') &&
       /^\d{1,2}$/.test(clockMarks.minute ?? '') &&
       /^\d{1,2}$/.test(clockMarks.second ?? '') &&
       (clockMarks.date ?? '').length > 0
     ) {
-      pass('the desktop clock draws its card and its digits', clockMarks);
+      pass('the header clock draws its scoreboard digits and date line', clockMarks);
     } else {
-      fail(`the desktop clock reads ${JSON.stringify(clockMarks ?? null)}`);
+      fail(`the header clock reads ${JSON.stringify(clockMarks ?? null)}`);
     }
-
-    // And it is where the request put it: the top centre of the primary work area,
-    // not wherever the last window happened to be. The bounds come from the main
-    // process, not from the page, because the page cannot see its own window.
-    const clockPlaced = latestEvent('clock-placed');
-    const placedBounds = clockPlaced?.detail?.bounds ?? null;
-    const placedArea = clockPlaced?.detail?.workArea ?? null;
-    if (placedBounds !== null && placedArea !== null) {
-      const centred =
-        Math.abs(
-          placedBounds.x + placedBounds.width / 2 - (placedArea.x + placedArea.width / 2),
-        ) <= 1;
-      const gap = placedBounds.y - placedArea.y;
-      if (centred && gap >= 0 && gap <= 40) {
-        pass('the clock hangs at the top centre of the work area', { bounds: placedBounds, workArea: placedArea });
-      } else {
-        fail(
-          `the clock sits at ${JSON.stringify(placedBounds)} in ${JSON.stringify(placedArea)} — expected it centred at the top`,
-        );
-      }
+    if (
+      clockMarks !== null &&
+      Math.abs(clockMarks.offsetX) <= 1 &&
+      clockMarks.offsetY >= 0 &&
+      clockMarks.offsetY <= 40
+    ) {
+      pass('the header clock is centred on the panel top edge', {
+        offsetX: clockMarks.offsetX,
+        offsetY: clockMarks.offsetY,
+      });
     } else {
-      fail('the main process never reported where it placed the clock');
+      fail(
+        `the header clock is ${JSON.stringify(clockMarks ?? null)} — expected it centred at the top`,
+      );
     }
 
     // --- phase 7: a multi-selection takes one bulk command (slice S7) ---------

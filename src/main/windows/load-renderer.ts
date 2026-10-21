@@ -13,7 +13,7 @@ import type { BootParams } from '@shared/types/app';
  * the same string, because the window may be drawn before this process could answer
  * an IPC round trip.
  */
-export type RendererEntry = 'panel' | 'marker' | 'reminder' | 'detail' | 'clock';
+export type RendererEntry = 'panel' | 'marker' | 'reminder' | 'detail';
 
 export async function loadRenderer(
   window: BrowserWindow,

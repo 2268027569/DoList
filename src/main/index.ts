@@ -18,7 +18,6 @@ import { broadcastTheme } from './services/broadcast';
 import { startReminderScheduler, stopReminderScheduler } from './services/scheduler';
 import { appSettings, applyNativeTheme, resolveBoot } from './services/settings';
 import { reconcileReminders } from './services/tasks';
-import { createClockWindow } from './windows/clock';
 import { createMarkerWindow } from './windows/marker';
 import { createPanelWindow, expandPanel } from './windows/panel';
 import { configureDetailWindows } from './windows/detail';
@@ -87,12 +86,9 @@ async function start(): Promise<void> {
   log('===== group 4/6 · ipc handlers');
   registerIpcHandlers();
 
-  log('===== group 5/6 · windows (marker + panel + clock + detail + reminder)');
+  log('===== group 5/6 · windows (marker + panel + detail + reminder)');
   createMarkerWindow(boot);
   createPanelWindow(boot);
-  // The desktop clock depends on nothing else: it belongs to the screen, not to the
-  // marker, so it is placed from the primary work area alone (M03).
-  createClockWindow(boot);
   // The detail is placed from the panel's rectangle and leaves with the panel, so it
   // is configured after both exist (M02 D6).
   configureDetailWindows(boot);

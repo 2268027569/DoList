@@ -2,15 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { Rect } from '../types/app';
 import {
-  CLOCK_SIZE,
-  CLOCK_TOP_GAP_PX,
   PANEL_GAP_PX,
   REMINDER_POPUP_SIZE,
   SNAP_THRESHOLD_PX,
   dockedEdge,
   fromAnchor,
   isVisibleIn,
-  placeClock,
   placePanel,
   placeReminderPopup,
   placeTaskDetail,
@@ -286,33 +283,6 @@ describe('dockedEdge', () => {
     expect(dockedEdge({ x: 40, y: 500, ...MARKER }, WORK_AREA)).toBe('free');
     expect(dockedEdge({ x: 900, y: 40, ...MARKER }, WORK_AREA)).toBe('free');
     expect(dockedEdge({ x: 900, y: 40, ...MARKER }, WORK_AREA, 64)).toBe('top');
-  });
-});
-
-describe('placeClock', () => {
-  it('hangs centred at the top of the work area', () => {
-    const rect = placeClock(WORK_AREA);
-    expect(rect.x + rect.width / 2).toBeCloseTo(WORK_AREA.x + WORK_AREA.width / 2, 6);
-    expect(rect.x).toBe(
-      Math.round(WORK_AREA.x + (WORK_AREA.width - CLOCK_SIZE.width) / 2),
-    );
-    expect(rect.y).toBe(WORK_AREA.y + CLOCK_TOP_GAP_PX);
-    expect(rect.width).toBe(CLOCK_SIZE.width);
-  });
-
-  it('centres on the display it is given, not on the virtual desktop', () => {
-    const secondary: Rect = { x: 1920, y: 40, width: 1920, height: 1040 };
-    const rect = placeClock(secondary);
-    expect(rect.x).toBe(secondary.x + Math.round((secondary.width - CLOCK_SIZE.width) / 2));
-    expect(rect.y).toBe(secondary.y + CLOCK_TOP_GAP_PX);
-  });
-
-  it('clamps to the left edge of a work area narrower than the card', () => {
-    const narrow: Rect = { x: 100, y: 0, width: 180, height: 400 };
-    const rect = placeClock(narrow);
-    // The card cannot fit, so it is kept whole and pinned to the left rather than
-    // half off screen on both sides.
-    expect(rect.x).toBe(narrow.x);
   });
 });
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactElement, TransitionEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -143,7 +143,13 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
         style={{ transitionDuration: `${durationMs}ms` }}
         onTransitionEnd={handleTransitionEnd}
       >
-        <header className="flex items-baseline justify-between gap-2">
+        {/*
+         * Three columns with the clock in the middle (M03): the name and the count
+         * sit at the edges they own, and the clock is centred in the panel's top edge
+         * whatever either side happens to be wide — `1fr auto 1fr` centres the middle
+         * track, which `justify-between` cannot do once the sides differ in width.
+         */}
+        <header className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2">
           {/*
            * The current view's name, spelled out: the sidebar is icon-only, so this
            * is the one place the panel says which slice of the tasks it is showing.
@@ -158,7 +164,8 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
           >
             {t(VIEW_COPY[view].name)}
           </h1>
-          <span className="flex shrink-0 items-baseline gap-2">
+          <PanelClock />
+          <span className="flex shrink-0 items-center justify-end gap-2">
             <span className="text-xs text-[var(--text-muted)]" data-field="view-count">
               {t('tasks:view.count', { count: tasks.length })}
             </span>
@@ -192,6 +199,131 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
       </section>
     </div>
   );
+}
+
+/**
+ * The panel's clock, drawn as a scoreboard card and centred in the header (M03).
+ *
+ * It is `<time>` rather than a div because it is a moment: the full date sits in the
+ * title, the machine-readable instant in `dateTime`, and the visible card is the same
+ * moment laid out like a sports scoreboard — two lit digit wells, an accent colon, a
+ * seconds column and one letter-spaced date line.
+ *
+ * The seconds are painted straight into their node; the React state only turns over
+ * once a minute. The panel is resident from launch to quit, so a second of React work
+ * every second of the day would be paid for nothing — this way the clock costs one
+ * text write per second and one render per minute.
+ *
+ * The digits are taken from `Intl.DateTimeFormat` parts, so a 24-hour locale simply
+ * has no period to draw while en-US gets its "PM" under the seconds.
+ */
+function PanelClock(): ReactElement {
+  const { i18n } = useTranslation();
+  const [minute, setMinute] = useState(() => minuteStart(Date.now()));
+  const minuteRef = useRef(minute);
+  const secondsRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    let timer = 0;
+    // Aligned to the second, then the minute: a chain started at mount drifts, and a
+    // clock whose digits turn over a few hundred ms late is visibly wrong next to the
+    // system clock in the corner.
+    const tick = (): void => {
+      const stamp = Date.now();
+      if (secondsRef.current !== null) {
+        secondsRef.current.textContent = String(new Date(stamp).getSeconds()).padStart(2, '0');
+      }
+      // Compared against a ref, not against state: a `setState` that resolves to the
+      // same value still costs a render pass, and this runs every second forever.
+      const next = minuteStart(stamp);
+      if (minuteRef.current !== next) {
+        minuteRef.current = next;
+        setMinute(next);
+      }
+      timer = window.setTimeout(tick, 1_000 - (stamp % 1_000));
+    };
+    timer = window.setTimeout(tick, 1_000 - (Date.now() % 1_000));
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  const date = new Date(minute);
+  let hour = '';
+  let minuteOfHour = '';
+  let period = '';
+  for (const part of new Intl.DateTimeFormat(i18n.language, {
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(date)) {
+    if (part.type === 'hour') hour = part.value;
+    else if (part.type === 'minute') minuteOfHour = part.value;
+    else if (part.type === 'dayPeriod') period = part.value;
+  }
+  const dateLabel = new Intl.DateTimeFormat(i18n.language, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  }).format(date);
+
+  return (
+    <time
+      dateTime={date.toISOString()}
+      title={date.toLocaleString(i18n.language)}
+      aria-label={date.toLocaleTimeString(i18n.language)}
+      data-field="panel-clock"
+      className="relative flex shrink-0 flex-col items-center gap-[3px] overflow-hidden rounded-[9px] border border-[var(--border-default)] bg-[var(--bg-surface-muted)] px-2 pb-1 pt-[5px]"
+    >
+      {/* The lit strip along the top edge: the one flourish that says "scoreboard". */}
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 h-[2px] bg-[var(--accent)] opacity-80"
+      />
+      <span
+        className="text-[8px] font-semibold uppercase leading-none tracking-[0.14em] text-[var(--text-secondary)]"
+        data-field="panel-clock-date"
+      >
+        {dateLabel}
+      </span>
+      {/* Digits keep their own direction on an RTL page; the date above follows the locale. */}
+      <span dir="ltr" className="flex items-center gap-1">
+        <span
+          className="grid h-6 w-7 place-items-center rounded-[5px] bg-[var(--bg-surface)] text-base font-bold leading-none tabular-nums text-[var(--text-primary)] shadow-[inset_0_0_0_1px_var(--border-default)]"
+          data-field="panel-clock-hour"
+        >
+          {hour}
+        </span>
+        <span aria-hidden="true" className="text-sm font-bold leading-none text-[var(--accent)]">
+          :
+        </span>
+        <span
+          className="grid h-6 w-7 place-items-center rounded-[5px] bg-[var(--bg-surface)] text-base font-bold leading-none tabular-nums text-[var(--text-primary)] shadow-[inset_0_0_0_1px_var(--border-default)]"
+          data-field="panel-clock-minute"
+        >
+          {minuteOfHour}
+        </span>
+        <span aria-hidden="true" className="mx-0.5 h-4 w-px bg-[var(--border-default)]" />
+        <span className="flex min-w-[18px] flex-col items-center gap-px">
+          <span
+            ref={secondsRef}
+            className="text-[11px] font-bold leading-none tabular-nums text-[var(--accent-text)]"
+            data-field="panel-clock-second"
+          >
+            00
+          </span>
+          {/* 24-hour locales have no period at all, so the slot takes no space. */}
+          {period === '' ? null : (
+            <span className="text-[7px] font-semibold uppercase leading-none text-[var(--text-muted)]">
+              {period}
+            </span>
+          )}
+        </span>
+      </span>
+    </time>
+  );
+}
+
+/** The instant the current minute began, so the clock renders once per minute. */
+function minuteStart(stamp: number): number {
+  return Math.floor(stamp / 60_000) * 60_000;
 }
 
 /** True when the event came from a control that keeps its own `Ctrl+Z`. */
