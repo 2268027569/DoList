@@ -59,12 +59,14 @@
 }
 
 .clock-date {
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 600;
   line-height: 1;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  /* Secondary, not muted: the date is the second line of a scoreboard, not a caption
+     that may disappear against the glass. */
+  color: var(--text-secondary);
   white-space: nowrap;
 }
 
