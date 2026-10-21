@@ -13,7 +13,7 @@
   },
   "main": "./out/main/index.js",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "dev": "electron-vite dev",
