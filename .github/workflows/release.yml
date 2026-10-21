@@ -105,7 +105,21 @@ jobs:
       - run: npm ci
       - run: npm run build
       - name: Package dmg and zip for both architectures
-        run: npx electron-builder --mac --publish never
+        shell: bash
+        run: |
+          set -o pipefail
+          npx electron-builder --mac --publish never 2>&1 | tee "$RUNNER_TEMP/mac-build.log"
+      # Runner logs need an account to open, but check-run annotations are public.
+      # Surface the useful tail here so a packaging failure is diagnosable.
+      - name: Report packaging failure
+        if: failure()
+        shell: bash
+        run: |
+          log="$RUNNER_TEMP/mac-build.log"
+          [ -f "$log" ] || exit 0
+          grep -nE '⨯|error|Error|failed|Cannot|ENOENT' "$log" | tail -n 8 | while IFS= read -r line; do
+            echo "::error::$line"
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: macos
