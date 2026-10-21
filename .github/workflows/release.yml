@@ -108,6 +108,12 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          # An absent secret still arrives as an empty string, and electron-builder
+          # treats a set-but-empty CSC_LINK as a path: it resolves to the project
+          # directory and aborts with "... not a file". Unset them instead.
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then unset "$name"; fi
+          done
           npx electron-builder --mac --publish never 2>&1 | tee "$RUNNER_TEMP/mac-build.log"
       # Runner logs need an account to open, but check-run annotations are public.
       # Surface the useful tail here so a packaging failure is diagnosable.
