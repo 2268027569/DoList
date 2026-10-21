@@ -136,12 +136,16 @@ export const TaskRow = memo(function TaskRow({
        * busy. It is positional and therefore not part of the task: it changes when the
        * list is reordered or a view is switched, and a screen reader skips it — the
        * row's own title is what it announces.
+       *
+       * Drawn in `secondary` rather than `muted`: the number is a way of pointing at a
+       * row ("the fifth one"), which only works if it can be read — including on the
+       * finished rows, whose titles are dimmed to `muted` and struck through.
        */}
       <span
         aria-hidden="true"
         data-field="row-index"
         data-task-id={task.id}
-        className="w-4 shrink-0 text-right text-[11px] leading-5 tabular-nums text-[var(--text-muted)]"
+        className="w-4 shrink-0 text-right text-[11px] leading-5 tabular-nums text-[var(--text-secondary)]"
       >
         {index + 1}
       </span>
