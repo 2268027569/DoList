@@ -1814,13 +1814,12 @@ async function main() {
       );
     }
 
-    // The list's own marks: every row is numbered, the finished one included, and the
-    // header carries a clock. Both are read from the DOM rather than from the report
-    // above, because the report says what was drawn and this says what is on screen.
+    // The list's own marks: every row is numbered, the finished one included. Read
+    // from the DOM rather than from the report above, because the report says what
+    // was drawn and this says what is on screen.
     const panelMarks = await evaluate(
       cdp,
       `(() => ({
-         clock: document.querySelector('[data-field="panel-clock"]')?.textContent?.trim() ?? null,
          numbers: [...document.querySelectorAll('[data-field="row-index"]')]
            .map((node) => node.textContent.trim()),
        }))()`,
@@ -1830,10 +1829,62 @@ async function main() {
     } else {
       fail(`the rows are numbered ${JSON.stringify(panelMarks?.numbers ?? null)}, expected 1,2,3`);
     }
-    if (typeof panelMarks?.clock === 'string' && /^\d{1,2}:\d{2}(\s?[AP]M)?$/.test(panelMarks.clock)) {
-      pass('the panel header carries a clock', { clock: panelMarks.clock });
+
+    // The desktop clock (M03) is a window of its own, so it is read from its own page
+    // rather than from the panel's. It is resident and shows regardless of the panel,
+    // which is the whole reason it was moved out of the header.
+    const clockPage = await attachEntry('clock', 8_000);
+    const clockMarks =
+      clockPage === null
+        ? null
+        : await evaluate(
+            clockPage,
+            `(() => {
+               const text = (field) =>
+                 document.querySelector('[data-field="' + field + '"]')?.textContent?.trim() ?? null;
+               return {
+                 card: document.querySelector('[data-field="clock-card"]') !== null,
+                 hour: text('clock-hour'),
+                 minute: text('clock-minute'),
+                 second: text('clock-second'),
+                 date: text('clock-date'),
+               };
+             })()`,
+          );
+    if (clockPage !== null) clockPage.close();
+    if (
+      clockMarks?.card === true &&
+      /^\d{1,2}$/.test(clockMarks.hour ?? '') &&
+      /^\d{1,2}$/.test(clockMarks.minute ?? '') &&
+      /^\d{1,2}$/.test(clockMarks.second ?? '') &&
+      (clockMarks.date ?? '').length > 0
+    ) {
+      pass('the desktop clock draws its card and its digits', clockMarks);
     } else {
-      fail(`the panel clock reads ${JSON.stringify(panelMarks?.clock ?? null)}`);
+      fail(`the desktop clock reads ${JSON.stringify(clockMarks ?? null)}`);
+    }
+
+    // And it is where the request put it: the top centre of the primary work area,
+    // not wherever the last window happened to be. The bounds come from the main
+    // process, not from the page, because the page cannot see its own window.
+    const clockPlaced = latestEvent('clock-placed');
+    const placedBounds = clockPlaced?.detail?.bounds ?? null;
+    const placedArea = clockPlaced?.detail?.workArea ?? null;
+    if (placedBounds !== null && placedArea !== null) {
+      const centred =
+        Math.abs(
+          placedBounds.x + placedBounds.width / 2 - (placedArea.x + placedArea.width / 2),
+        ) <= 1;
+      const gap = placedBounds.y - placedArea.y;
+      if (centred && gap >= 0 && gap <= 40) {
+        pass('the clock hangs at the top centre of the work area', { bounds: placedBounds, workArea: placedArea });
+      } else {
+        fail(
+          `the clock sits at ${JSON.stringify(placedBounds)} in ${JSON.stringify(placedArea)} — expected it centred at the top`,
+        );
+      }
+    } else {
+      fail('the main process never reported where it placed the clock');
     }
 
     // --- phase 7: a multi-selection takes one bulk command (slice S7) ---------

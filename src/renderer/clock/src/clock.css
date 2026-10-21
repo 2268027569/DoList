@@ -1,0 +1,162 @@
+/*
+ * The desktop clock's stylesheet. Hand-written and tiny, like the marker's: this
+ * window is resident, so it does not carry Tailwind (docs/ARCHITECTURE.md §2).
+ *
+ * The look is a scoreboard's: two lit digit wells, an accent colon between them, a
+ * seconds column and one letter-spaced date line. Every colour is a token, so the
+ * card follows the theme and the system material like every other surface (§7).
+ */
+@import '../../shared-ui/base.css';
+
+:root[data-mode='light'] {
+  color-scheme: light;
+}
+
+:root[data-mode='dark'] {
+  color-scheme: dark;
+}
+
+/*
+ * The 8px margin is where the CSS shadow falls on a transparent window; on glass the
+ * shared base layer removes it and the window itself is the card's shape (§7).
+ */
+.window-frame {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  padding: 8px;
+}
+
+.clock-card {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border-default);
+  border-radius: var(--panel-radius);
+  background-color: var(--bg-surface);
+  box-shadow: var(--panel-shadow);
+}
+
+/* The lit strip along the top edge: the one flourish that says "scoreboard". */
+.clock-card::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto;
+  height: 2px;
+  background-color: var(--accent);
+  opacity: 0.9;
+}
+
+.clock-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.clock-date {
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+/*
+ * A digital clock is read left to right everywhere, including on an RTL page, so the
+ * digits keep their own direction while the date above them follows the locale.
+ */
+.clock-main {
+  display: flex;
+  direction: ltr;
+  align-items: center;
+  gap: 6px;
+}
+
+.clock-cell {
+  display: grid;
+  place-items: center;
+  width: 50px;
+  height: 42px;
+  border-radius: 8px;
+  background-color: var(--bg-surface-muted);
+  box-shadow: inset 0 0 0 1px var(--border-default);
+}
+
+.clock-digits {
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+
+.clock-colon {
+  font-size: 24px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--accent);
+}
+
+.clock-split {
+  width: 1px;
+  height: 26px;
+  background-color: var(--border-default);
+}
+
+.clock-side {
+  display: flex;
+  min-width: 22px;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.clock-seconds {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: var(--accent-text);
+}
+
+.clock-period {
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* `display: none` rather than an empty slot: 24-hour locales have no period. */
+.clock-period:empty {
+  display: none;
+}
+
+/*
+ * Glass: the card fills the window and lets the system material through, exactly
+ * like the panel's card. The digit wells drop to a translucent tint so the backdrop
+ * still reads inside them rather than being covered by an opaque block.
+ */
+:root[data-material='glass'] .clock-card {
+  border-radius: 0;
+  box-shadow: none;
+  background-color: color-mix(
+    in srgb,
+    var(--bg-surface) calc(var(--panel-opacity, 1) * 50%),
+    transparent
+  );
+}
+
+:root[data-material='glass'] .clock-cell {
+  background-color: color-mix(in srgb, var(--bg-surface-muted) 62%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-default) 70%, transparent);
+}

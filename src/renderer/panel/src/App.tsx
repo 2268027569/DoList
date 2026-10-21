@@ -159,7 +159,6 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
             {t(VIEW_COPY[view].name)}
           </h1>
           <span className="flex shrink-0 items-baseline gap-2">
-            <PanelClock />
             <span className="text-xs text-[var(--text-muted)]" data-field="view-count">
               {t('tasks:view.count', { count: tasks.length })}
             </span>
@@ -192,44 +191,6 @@ export function App({ boot }: { boot: BootParams }): ReactElement {
         <span className="panel-resize" aria-hidden="true" onPointerDown={resize.onPointerDown} />
       </section>
     </div>
-  );
-}
-
-/**
- * The panel's clock (M03). The panel is always on top and is the surface the user keeps
- * parked in a corner of the screen, so the time belongs on it rather than in a status
- * bar this app does not have.
- *
- * It wakes on the minute boundary rather than on a 60-second interval started at mount,
- * so the digits turn over when the minute does; and it is `<time>` with a full date in
- * its title, so the exact moment is one hover away.
- */
-function PanelClock(): ReactElement {
-  const { i18n } = useTranslation();
-  const [now, setNow] = useState(() => Date.now());
-
-  useEffect(() => {
-    let timer = 0;
-    const schedule = (): void => {
-      timer = window.setTimeout(() => {
-        setNow(Date.now());
-        schedule();
-      }, 60_000 - (Date.now() % 60_000));
-    };
-    schedule();
-    return () => window.clearTimeout(timer);
-  }, []);
-
-  const date = new Date(now);
-  return (
-    <time
-      dateTime={date.toISOString()}
-      title={date.toLocaleString(i18n.language)}
-      data-field="panel-clock"
-      className="text-xs font-medium tabular-nums text-[var(--text-secondary)]"
-    >
-      {date.toLocaleTimeString(i18n.language, { hour: '2-digit', minute: '2-digit' })}
-    </time>
   );
 }
 

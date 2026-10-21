@@ -86,6 +86,7 @@ export default defineConfig({
           marker: resolve(root, 'src/renderer/marker/index.html'),
           reminder: resolve(root, 'src/renderer/reminder/index.html'),
           detail: resolve(root, 'src/renderer/detail/index.html'),
+          clock: resolve(root, 'src/renderer/clock/index.html'),
         },
       },
     },

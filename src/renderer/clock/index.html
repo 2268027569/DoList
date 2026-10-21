@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>YiChen ToDo</title>
+  </head>
+  <body>
+    <div class="window-frame">
+      <section class="clock-card" data-field="clock-card">
+        <time class="clock-body" data-field="clock">
+          <span class="clock-date" data-field="clock-date"></span>
+          <span class="clock-main">
+            <span class="clock-cell">
+              <span class="clock-digits" data-field="clock-hour"></span>
+            </span>
+            <span class="clock-colon" aria-hidden="true">:</span>
+            <span class="clock-cell">
+              <span class="clock-digits" data-field="clock-minute"></span>
+            </span>
+            <span class="clock-split" aria-hidden="true"></span>
+            <span class="clock-side">
+              <span class="clock-seconds" data-field="clock-second"></span>
+              <span class="clock-period" data-field="clock-period"></span>
+            </span>
+          </span>
+        </time>
+      </section>
+    </div>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
